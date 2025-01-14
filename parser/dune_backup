@@ -1,0 +1,7 @@
+(test
+ (name parser_test)
+ (modules parser_test)
+ (package minimal-links-parser)
+ (libraries minimal-links-parser.core)
+ (preprocess (pps ppx_deriving.std)))
+

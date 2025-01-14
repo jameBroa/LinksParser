@@ -1,0 +1,13 @@
+(executable
+ (name parser)
+ (modules parser)
+ (libraries links.core yojson ppx_deriving_yojson)
+ (preprocess (pps ppx_deriving.std ppx_deriving_yojson)))
+
+; (executable
+;  (name parser)
+;  (modules parser)
+;  (libraries links.core)
+;  (preprocess (pps ppx_deriving.std))
+;  (modes js) 
+;  )

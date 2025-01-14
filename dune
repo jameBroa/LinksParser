@@ -1,0 +1,12 @@
+(dirs :standard \ _build)
+
+(rule 
+ (alias all)
+ (deps
+  (alias_rec core/all)
+  (alias_rec parser/all))
+  (action (progn)))
+
+(alias 
+ (name default)
+ (deps (alias all)))

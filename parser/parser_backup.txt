@@ -1,0 +1,481 @@
+open Links_core
+
+type ast = 
+    | Node of string * ast list
+    | Leaf of string
+    [@@deriving yojson]
+
+
+(* Problems:  
+    Problem: Parsing breaks when comments are in code
+    
+    Potential solution: From the LSP Server, only strip comments from submitted code
+
+    Implemented: No
+*)
+
+let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
+    let open Links_core.Sugartypes in
+    let open Links_core.SourceCode in
+    let open Links_core.Operators in
+    let open Links_core.CommonTypes in
+    match WithPos.node phrase with
+        | Constant c -> Leaf ("Constant: " ^ Constant.show c)
+        | Var v -> Leaf ("Var: " ^ v)
+        | FreezeVar v -> Leaf ("FreezeVar: " ^ v)
+        | QualifiedVar vs -> Node ("QualifiedVar", List.map (fun v -> Leaf v) vs)
+        | FunLit (_, _, fnlit, _) -> Node ("FunLit", [convert_funlit_to_ast fnlit])
+        | Spawn (_, _, p, _) -> Node ("Spawn", [convert_phrase_to_ast p])
+        | Query (_, _, p, _) -> Node ("Query", [convert_phrase_to_ast p])
+        | RangeLit (p1, p2) -> Node ("RangeLit", [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
+        | ListLit (ps, _) -> Node ("ListLit", List.map convert_phrase_to_ast ps)
+        | Iteration (_, p, _, _) -> Node ("Iteration", [convert_phrase_to_ast p])
+        | Escape (_, p) -> Node ("Escape", [convert_phrase_to_ast p])
+        | Section s -> Leaf ("Section: " ^ Section.show s)
+        | FreezeSection s -> Leaf ("FreezeSection: " ^ Section.show s)
+        | Conditional (p1, p2, p3) -> Node ("Conditional", [convert_phrase_to_ast p1; convert_phrase_to_ast p2; convert_phrase_to_ast p3])
+        | Block (bindings, expr) -> Node ("Block", List.map convert_binding_to_ast bindings @ [convert_phrase_to_ast expr])
+        | InfixAppl ((_, op), lhs, rhs) -> Node ("InfixAppl", [Leaf (BinaryOp.to_string op); convert_phrase_to_ast lhs; convert_phrase_to_ast rhs])
+        | Regex r -> Node("Regex", [convert_regex_to_ast r])
+        | UnaryAppl (_, p) -> Node ("UnaryAppl", [convert_phrase_to_ast p])
+        | FnAppl (fn, args) -> Node ("FnAppl", convert_phrase_to_ast fn :: List.map convert_phrase_to_ast args)
+        | TAbstr (_, p) -> Node ("TAbstr", [convert_phrase_to_ast p])
+        | TAppl (p, _) -> Node ("TAppl", [convert_phrase_to_ast p])
+        | TupleLit ps -> Node ("TupleLit", List.map convert_phrase_to_ast ps)
+        | RecordLit (fields, _) -> Node ("RecordLit", List.map (fun (name, expr) -> Node (name, [convert_phrase_to_ast expr])) fields)
+        | Projection (p, name) -> Node ("Projection", [convert_phrase_to_ast p; Leaf name])
+        | With (p, fields) -> Node ("With", convert_phrase_to_ast p :: List.map (fun (name, expr) -> Node (name, [convert_phrase_to_ast expr])) fields)
+        | TypeAnnotation (p, _) -> Node ("TypeAnnotation", [convert_phrase_to_ast p])
+        | Upcast (p, _, _) -> Node ("Upcast", [convert_phrase_to_ast p])
+        | Instantiate p -> Node ("Instantiate", [convert_phrase_to_ast p])
+        | Generalise p -> Node ("Generalise", [convert_phrase_to_ast p])
+        | ConstructorLit (name, expr_opt, _) -> Node ("ConstructorLit", Leaf name :: (match expr_opt with Some expr -> [convert_phrase_to_ast expr] | None -> []))
+        | DoOperation (p, ps, _, _) -> Node ("DoOperation", convert_phrase_to_ast p :: List.map convert_phrase_to_ast ps)
+        | Operation name -> Leaf ("Operation: " ^ name)
+        | Handle h -> Node ("Handle", [convert_handler_to_ast h])
+        | Unlet p -> Node ("Unlet", [convert_phrase_to_ast p])
+        | Linlet p -> Node ("Linlet", [convert_phrase_to_ast p])
+        | Switch (p, cases, _) -> Node ("Switch", convert_phrase_to_ast p :: List.map convert_case_to_ast cases)
+        | Receive (cases, _) -> Node ("Receive", List.map convert_case_to_ast cases)
+        | DatabaseLit (p, _) -> Node ("DatabaseLit", [convert_phrase_to_ast p])
+        | TableLit t -> Node ("TableLit", [convert_table_lit_to_ast t])
+        | DBDelete (_, pat, p, _) -> Node ("DBDelete", [convert_pattern_to_ast pat; convert_phrase_to_ast p])
+        | DBInsert (_, p, _, p_opt, popt) -> 
+            Node ("DBInsert", 
+                [convert_phrase_to_ast p; convert_phrase_to_ast p_opt] @
+                (match popt with Some p -> [convert_phrase_to_ast p] | None -> [])
+            )
+        | DBUpdate (_, pat, p, _, fields) -> Node ("DBUpdate", convert_pattern_to_ast pat :: convert_phrase_to_ast p :: List.map (fun (name, expr) -> Node (name, [convert_phrase_to_ast expr])) fields)
+        | DBTemporalJoin (_, p, _) -> Node ("DBTemporalJoin", [convert_phrase_to_ast p])
+        | LensLit (p, _) -> Node ("LensLit", [convert_phrase_to_ast p])
+        | LensSerialLit (p, _, _) -> Node ("LensSerialLit", [convert_phrase_to_ast p])
+        | LensKeysLit (p1, p2, _) -> Node ("LensKeysLit", [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
+        | LensFunDepsLit (p, _, _) -> Node ("LensFunDepsLit", [convert_phrase_to_ast p])
+        | LensDropLit (p1, _, _, p2, _) -> Node ("LensDropLit", [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
+        | LensSelectLit (p1, p2, _) -> Node ("LensSelectLit", [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
+        | LensJoinLit (p1, p2, p3, p4, p5, _) -> Node ("LensJoinLit", [convert_phrase_to_ast p1; convert_phrase_to_ast p2; convert_phrase_to_ast p3; convert_phrase_to_ast p4; convert_phrase_to_ast p5])
+        | LensGetLit (p, _) -> Node ("LensGetLit", [convert_phrase_to_ast p])
+        | LensCheckLit (p, _) -> Node ("LensCheckLit", [convert_phrase_to_ast p])
+        | LensPutLit (p1, p2, _) -> Node ("LensPutLit", [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
+        | Xml (name, attrs, expr_opt, children) -> Node ("Xml", Leaf name :: List.map (fun (name, exprs) -> Node (name, List.map convert_phrase_to_ast exprs)) attrs @ (match expr_opt with Some expr -> [convert_phrase_to_ast expr] | None -> []) @ List.map convert_phrase_to_ast children)
+        | TextNode text -> Leaf ("TextNode: " ^ text)
+        | Formlet (p1, p2) -> Node ("Formlet", [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
+        | Page p -> Node ("Page", [convert_phrase_to_ast p])
+        | FormletPlacement (p1, p2, p3) -> Node ("FormletPlacement", [convert_phrase_to_ast p1; convert_phrase_to_ast p2; convert_phrase_to_ast p3])
+        | PagePlacement p -> Node ("PagePlacement", [convert_phrase_to_ast p])
+        | FormBinding (p, pat) -> Node ("FormBinding", [convert_phrase_to_ast p; convert_pattern_to_ast pat])
+        | Select (name, p) -> Node ("Select", [Leaf name; convert_phrase_to_ast p])
+        | Offer (p, cases, _) -> Node ("Offer", convert_phrase_to_ast p :: List.map convert_case_to_ast cases)
+        | CP cp -> Node ("CP", [convert_cp_phrase_to_ast cp])
+        | TryInOtherwise (p1, pat, p2, p3, _) -> Node ("TryInOtherwise", [convert_phrase_to_ast p1; convert_pattern_to_ast pat; convert_phrase_to_ast p2; convert_phrase_to_ast p3])
+        | Raise -> Leaf "Raise"
+
+
+
+    (* | Var v -> Leaf ("Var: " ^ v)
+    | FunLit (_, _, fnlit, _) -> Node ("FunLit: ", [convert_funlit_to_ast fnlit])
+    | Block (bindings, expr) -> Node ("Block: ", List.map convert_binding_to_ast bindings @ [convert_phrase_to_ast expr])
+    | InfixAppl ((_, op), lhs, rhs) -> Node ("InfixAppl: ", [Leaf (BinaryOp.to_string op); convert_phrase_to_ast lhs; convert_phrase_to_ast rhs])
+    | FnAppl (fn, args) -> Node ("FnAppl: ", convert_phrase_to_ast fn :: List.map convert_phrase_to_ast args)
+    | Constant c -> Leaf ("Constant: " ^ Constant.show c)
+    | RecordLit (fields, _) -> Node ("RecordLit", List.map (fun (name, expr) -> Node (name, [convert_phrase_to_ast expr])) fields)
+    | ConstructorLit (name, expr_opt, _) -> Node ("ConstructorLit", [Leaf name] @ (match expr_opt with Some expr -> [convert_phrase_to_ast expr] | None -> []))
+    | _ -> Leaf (show_phrase phrase) *)
+  
+  (* Helper function to convert a funlit to an AST node *)
+  and convert_funlit_to_ast (fnlit : Sugartypes.funlit) : ast =
+    let open Sugartypes in
+    match fnlit with
+    | NormalFunlit (args, body) ->
+        Node ("NormalFunlit", List.flatten (List.map (List.map convert_pattern_to_ast) args) @ [convert_phrase_to_ast body])
+    | SwitchFunlit (args, body) ->
+        Node ("SwitchFunlit", List.flatten (List.map (List.map convert_pattern_to_ast) args) @ [convert_switch_body_to_ast body])
+  
+  (* Helper function to convert a pattern to an AST node *)
+  and convert_pattern_to_ast (pattern : Sugartypes.Pattern.with_pos) : ast =
+    let open Sugartypes.Pattern in
+    let open Links_core.SourceCode in
+    match WithPos.node pattern with
+    | Variable bndr -> Leaf ("Variable: " ^ (Sugartypes.Binder.to_name bndr))
+    | node -> Leaf (show node)
+  
+  (* Helper function to convert a switch body to an AST node *)
+  and convert_switch_body_to_ast (body : (Sugartypes.Pattern.with_pos * Sugartypes.phrase) list) : ast =
+    Node ("SwitchBody", List.map (fun (pat, phr) -> Node ("Case", [convert_pattern_to_ast pat; convert_phrase_to_ast phr])) body)
+  
+  (* Helper function to convert a binding to an AST node *)
+  and convert_binding_to_ast (binding : Sugartypes.binding) : ast =
+    let open Sugartypes in
+    let open SourceCode in
+    match WithPos.node binding with
+        | Val (pat, (_, rhs), _, _) -> 
+            Node ("Val", [convert_pattern_to_ast pat; convert_phrase_to_ast rhs])
+        | Fun { fun_binder; fun_definition = (_, fn); _ } ->
+            Node ("Fun", [Leaf ("Binder: " ^ (Binder.to_name fun_binder)); convert_funlit_to_ast fn])
+        | Funs funs ->
+            Node ("Funs", List.map (fun fun_def ->
+                let { rec_binder; rec_definition = (_, fn); _ } = WithPos.node fun_def in
+                Node ("Fun", [Leaf ("Binder: " ^ (Binder.to_name rec_binder)); convert_funlit_to_ast fn])
+            ) funs)
+        | Foreign alien ->
+            let (binder, (_, datatype_opt)) = Alien.declaration alien in
+            let datatype_str = 
+                match datatype_opt with
+                    | Some datatype -> Types.string_of_datatype datatype
+                    | None -> "None"
+                in
+                Node ("Foreign", [
+                    Leaf ("Binder: " ^ (Binder.to_name binder));
+                    Leaf ("Datatype: " ^ datatype_str)
+                ])
+        | Import { pollute; path } ->
+            Node ("Import", [Leaf ("Pollute: " ^ string_of_bool pollute); Node ("Path", List.map (fun name -> Leaf name) path)])
+        | Open names ->
+            Node ("Open", List.map (fun name -> Leaf name) names)
+        | Aliases aliases -> 
+            Node("Aliases", List.map(fun alias ->
+                let (name, _, alias_body) = WithPos.node alias in
+                Node(name, [convert_alias_body_to_ast alias_body])
+            ) aliases)
+        | Infix { assoc; precedence; name } ->
+            let open Operators in
+            Node ("Infix", [Leaf ("Assoc: " ^ Associativity.show assoc); Leaf ("Precedence: " ^ string_of_int precedence); Leaf ("Name: " ^ name)])
+        | Exp phrase ->
+            Node ("Exp", [convert_phrase_to_ast phrase])
+        | Module { binder; members } ->
+            Node ("Module", [Leaf ("Binder: " ^ (Binder.to_name binder)); Node ("Members", List.map convert_binding_to_ast members)])
+        | AlienBlock alien ->
+            Node ("AlienBlock", List.map (fun (binder, datatype) ->
+                let datatype_str = match snd datatype with
+                    | Some dt -> Types.string_of_datatype dt
+                    | None -> "None"
+                in
+                Node ("Declaration", [
+                    Leaf ("Binder: " ^ (Binder.to_name binder));
+                    Leaf ("Datatype: " ^ datatype_str)
+                ])
+            ) (Alien.declarations alien))
+        (* | _ -> Leaf (show_binding binding) *)
+
+
+
+    (* | Val (pat, (_, rhs), _, _) -> Node ("Val", [convert_pattern_to_ast pat; convert_phrase_to_ast rhs])
+    | Fun { fun_binder; fun_definition = (_, fn); _} ->
+        Node ("Fun", [Leaf ("Binder: " ^ (Binder.to_name fun_binder)); convert_funlit_to_ast fn])
+    | Aliases aliases -> 
+        Node("Aliases", List.map(fun alias ->
+            let (name, _, alias_body) = WithPos.node alias in
+            Node(name, [convert_alias_body_to_ast alias_body])
+            ) aliases)
+        
+    | _ -> Leaf (show_binding binding) *)
+  and convert_alias_body_to_ast (alias_body: Sugartypes.aliasbody) : ast = 
+    let open Sugartypes in
+    (* let open SourceCode in *)
+    match alias_body with
+    | Typename (datatype, _) -> Node ("Typename", [convert_datatype_to_ast datatype])
+    | Effectname (row, _) -> Node ("Effectname", [convert_row_to_ast row])
+
+  and convert_datatype_to_ast (datatype: Sugartypes.Datatype.with_pos) : ast =
+    let open Sugartypes.Datatype in
+    let open SourceCode in
+    let open CommonTypes in
+    let open Sugartypes in
+    match WithPos.node datatype with
+        | TypeVar var -> Node ("TypeVar", [Leaf (SugarTypeVar.show var)])
+        | QualifiedTypeApplication (names, args) -> 
+            Node("QualifiedTypeApplication", 
+                List.map (fun name -> Leaf name) names @ 
+                List.map convert_type_arg_to_ast args)
+        | Function (params, row, ret) ->
+            Node ("Function", 
+                List.map convert_with_pos_to_ast params @
+                [convert_row_to_ast row; convert_with_pos_to_ast ret])
+        | Lolli (params, row, ret) ->
+            Node ("Lolli", 
+                List.map convert_with_pos_to_ast params @
+                [convert_row_to_ast row; convert_with_pos_to_ast ret])
+        | Mu (var, body) -> 
+            Node("Mu", [Leaf (SugarTypeVar.show var); convert_with_pos_to_ast body])
+        | Forall (quantifiers, body) ->
+            Node("Forall",
+                List.map(fun q -> Leaf (SugarQuantifier.show q)) quantifiers @ [convert_with_pos_to_ast body])
+        | Unit -> Leaf "Unit"
+        | Tuple elements -> 
+            Node ("Tuple", List.map convert_with_pos_to_ast elements)
+        | Record row -> 
+            Node ("Record", [convert_row_to_ast row])
+        | Variant row -> 
+            Node ("Variant", [convert_row_to_ast row])
+        | Effect row -> 
+            Node ("Effect", [convert_row_to_ast row])
+        | Operation (params, ret, linearity) -> 
+            Node ("Operation", 
+                    List.map convert_with_pos_to_ast params @ 
+                    [convert_with_pos_to_ast ret; Leaf (DeclaredLinearity.show linearity)])
+        | Table (temporality, key, value, row) -> 
+            Node ("Table", 
+                    [Leaf (Temporality.show temporality); 
+                    convert_with_pos_to_ast key; 
+                    convert_with_pos_to_ast value; 
+                    convert_with_pos_to_ast row])
+        | List element -> 
+            Node ("List", [convert_with_pos_to_ast element])
+        | TypeApplication (name, args) -> 
+            Node ("TypeApplication", 
+                    Leaf name :: List.map convert_type_arg_to_ast args)
+        | Primitive p -> Leaf ("Primitive: " ^ Primitive.show p)
+        | DB -> Leaf "DB"
+        | Input (input, output) -> 
+            Node ("Input", [convert_with_pos_to_ast input; convert_with_pos_to_ast output])
+        | Output (input, output) -> 
+            Node ("Output", [convert_with_pos_to_ast input; convert_with_pos_to_ast output])
+        | Select row -> 
+            Node ("Select", [convert_row_to_ast row])
+        | Choice row -> 
+            Node ("Choice", [convert_row_to_ast row])
+        | Dual typ -> 
+            Node ("Dual", [convert_with_pos_to_ast typ])
+        | End -> Leaf "End"
+        (* | Variant (fields, _) -> Node ("Variant", List.map (fun (name, spec) -> Node (name, [convert_fieldspec_to_ast spec])) fields) *)
+        (* | Record (fields, _) -> Node ("Record", List.map (fun (name, spec) -> Node (name, [convert_fieldspec_to_ast spec])) fields) *)
+        (* | TypeApplication (name, args) -> Node ("TypeApplication", Leaf name :: List.map convert_type_arg_to_ast args) *)
+        (* | Primitive p -> Leaf ("Primitive: " ^ Primitive.show p) *)
+        (* | node -> Leaf (show node) *)
+  and convert_row_to_ast (row: Sugartypes.Datatype.row) : ast =
+    (* let open Sugartypes in *)
+    (* let open SourceCode in *)
+    match row with
+    | (fields, _) -> Node ("Row", List.map (fun (name, field) -> Node (name, [convert_field_to_ast field])) fields)
+  and convert_field_to_ast (field: Sugartypes.Datatype.fieldspec) : ast =
+        let open Sugartypes.Datatype in
+        (* let open SourceCode in *)
+        (* let open Sugartypes.SugarTypeVar in *)
+        let open Sugartypes in
+        (* let open CommonTypes in *)
+        (* let open Links_core.Types in *)
+        match field with
+        | Present expr -> Node ("Present", [convert_with_pos_to_ast expr])
+        | Absent -> Leaf "Absent"
+        | Var var -> 
+            let var_name = SugarTypeVar.show var in
+            Node("Var", [Leaf var_name])
+  and convert_with_pos_to_ast (with_pos: 'a SourceCode.WithPos.t) : ast =
+    (* let open SourceCode in *)
+    (* let node = WithPos.node with_pos in *)
+    (* let pos = WithPos.pos with_pos in *)
+    Node ("WithPos", [convert_datatype_to_ast with_pos])
+  and convert_type_arg_to_ast (type_arg: Sugartypes.Datatype.type_arg) : ast = 
+    (* let open Sugartypes in *)
+    match type_arg with
+        | Type typ -> Node ("Type", [convert_datatype_to_ast typ])
+        | Row row -> Node ("Row", [convert_row_to_ast row])
+        | Presence field -> Node ("Presence", [convert_field_to_ast field])
+  and convert_regex_to_ast(regex: Sugartypes.regex): ast =
+    let open Sugartypes in
+    match regex with
+    | Range (c1, c2) -> Node ("Range", [Leaf (String.make 1 c1); Leaf (String.make 1 c2)])
+    | Simply s -> Leaf ("Simply: " ^ s)
+    | Quote r -> Node ("Quote", [convert_regex_to_ast r])
+    | Any -> Leaf "Any"
+    | StartAnchor -> Leaf "StartAnchor"
+    | EndAnchor -> Leaf "EndAnchor"
+    | Seq rs -> Node ("Seq", List.map convert_regex_to_ast rs)
+    | Alternate (r1, r2) -> Node ("Alternate", [convert_regex_to_ast r1; convert_regex_to_ast r2])
+    | Group r -> Node ("Group", [convert_regex_to_ast r])
+    | Repeat (rep, r) -> Node ("Repeat", [Leaf (Regex.show_repeat rep); convert_regex_to_ast r])
+    | Splice p -> Node ("Splice", [convert_phrase_to_ast p])
+    | Replace (r, rhs) -> Node ("Replace", [convert_regex_to_ast r; Leaf (show_replace_rhs rhs)])
+  and convert_handler_to_ast(handler: Sugartypes.handler) : ast = 
+    let open Sugartypes in
+    Node ("Handler", [
+        Node ("Expr", [convert_phrase_to_ast handler.sh_expr]);
+        Node ("EffectCases", List.map convert_case_to_ast handler.sh_effect_cases);
+        Node ("ValueCases", List.map convert_case_to_ast handler.sh_value_cases);
+        Node ("Descriptor", [convert_handler_descriptor_to_ast handler.sh_descr])
+    ])
+  and convert_handler_descriptor_to_ast(descr: Sugartypes.handler_descriptor) : ast =
+    let open Sugartypes in
+    let (row1, dat1, row2, dat2) = descr.shd_types in
+    Node ("HandlerDescriptor", [
+        Leaf ("Depth: " ^ show_handler_depth descr.shd_depth);
+        Node ("Types", [
+            Leaf ("Row1: " ^ (Types.string_of_datatype row1));
+            Leaf ("Dat1: " ^ Types.string_of_datatype dat1);
+            Leaf ("Row2: " ^ Types.string_of_datatype row2);
+            Leaf("Dat2: " ^ Types.string_of_datatype dat2);
+            (* Leaf ("Datatype: " ^ Types.show_datatype descr.shd_types); *)
+            (* Leaf ("RawRow: " ^ show_typ descr.shd_raw_row); *)
+        ]);
+        Node ("Params", 
+            match descr.shd_params with
+                | Some params -> [convert_handler_parameterisation_to_ast params]
+                | None -> [Leaf "None"]
+        )
+    ])
+   and convert_handler_parameterisation_to_ast (params : Sugartypes.handler_parameterisation) : ast =
+    let open Sugartypes in
+    Node ("HandlerParameterisation", [
+        Node ("Bindings", List.map (fun (pat, phr) -> Node ("Binding", [convert_pattern_to_ast pat; convert_phrase_to_ast phr])) params.shp_bindings);
+        Node ("Types", List.map (fun typ -> Leaf (Types.string_of_datatype typ)) params.shp_types)
+    ])
+    and convert_case_to_ast (case : Sugartypes.clause) : ast =
+        let (pat, phr) = case in
+        Node ("Case", [convert_pattern_to_ast pat; convert_phrase_to_ast phr])
+    and convert_table_lit_to_ast (table_lit : Sugartypes.table_lit) : ast =
+        let open Sugartypes in
+        let open CommonTypes in
+        let (temporality, datatype_with_pos, typ_option) = table_lit.tbl_type in
+        Node ("TableLit", [
+            Node ("Name", [convert_phrase_to_ast table_lit.tbl_name]);
+
+            Node ("Type", [
+                Leaf ("Temporality: " ^ Temporality.show temporality);
+                convert_datatype_to_ast  datatype_with_pos;
+                (match typ_option with
+                | Some (typ1, typ2, typ3) -> Node ("Types", [
+                    Leaf ("Type1: " ^ Types.string_of_datatype typ1);
+                    Leaf ("Type2: " ^ Types.string_of_datatype typ2);
+                    Leaf ("Type3: " ^ Types.string_of_datatype typ3)
+                ])
+                | None -> Leaf "None")
+            ]);
+
+            Node ("FieldConstraints", List.map (fun (name, constraints) -> 
+                Node (name, List.map (fun (field_constraint) -> Leaf (show_fieldconstraint field_constraint)) constraints)
+            ) table_lit.tbl_field_constraints);
+
+            Node ("Keys", [convert_phrase_to_ast table_lit.tbl_keys]);
+
+            Node ("TemporalFields", [
+                match table_lit.tbl_temporal_fields with
+                    | Some (field1, field2) -> Node ("Fields", [Leaf field1; Leaf field2])
+                    | None -> Leaf "None"
+                ]
+            );
+            Node ("Database", [convert_phrase_to_ast table_lit.tbl_database])
+
+        ])
+        and convert_cp_phrase_to_ast (cp_phrase : Sugartypes.cp_phrase) : ast =
+            let open Sugartypes in
+            let open SourceCode in
+            match WithPos.node cp_phrase with
+                | CPUnquote (bindings, expr) -> Node ("CPUnquote", [convert_block_to_ast (bindings, expr)])
+                | CPGrab ((name, typ_opt), binder_opt, cp) -> Node ("CPGrab", [
+                    Leaf ("Name: " ^ name);
+                    (match typ_opt with
+                    | Some (typ, args) -> Node ("Type", [Leaf (Types.string_of_datatype typ); Node ("Args", List.map (fun arg -> Leaf (Types.string_of_type_arg arg)) args)])
+                    | None -> Leaf "None");
+                    (match binder_opt with
+                    | Some binder -> Node ("Binder", [convert_binder_to_ast binder])
+                    | None -> Leaf "None");
+                    convert_cp_phrase_to_ast cp
+                ])
+                | CPGive ((name, typ_opt), expr_opt, cp) -> Node ("CPGive", [
+                    Leaf ("Name: " ^ name);
+                    (match typ_opt with
+                    | Some (typ, args) -> Node ("Type", [Leaf (Types.string_of_datatype typ); Node ("Args", List.map (fun arg -> Leaf (Types.string_of_type_arg arg)) args)])
+                    | None -> Leaf "None");
+                    (match expr_opt with
+                    | Some expr -> Node ("Expr", [convert_phrase_to_ast expr])
+                    | None -> Leaf "None");
+                    convert_cp_phrase_to_ast cp
+                ])
+                | CPGiveNothing binder -> Node ("CPGiveNothing", [convert_binder_to_ast binder])
+                | CPSelect (binder, label, cp) -> Node ("CPSelect", [
+                    convert_binder_to_ast binder;
+                    Leaf ("Label: " ^ label);
+                    convert_cp_phrase_to_ast cp
+                ])
+                | CPOffer (binder, cases) -> Node ("CPOffer", [
+                    convert_binder_to_ast binder;
+                    Node ("Cases", List.map (fun (label, cp) -> Node (label, [convert_cp_phrase_to_ast cp])) cases)
+                ])
+                | CPLink (binder1, binder2) -> Node ("CPLink", [
+                    convert_binder_to_ast binder1;
+                    convert_binder_to_ast binder2
+                ])
+                | CPComp (binder, cp1, cp2) -> Node ("CPComp", [
+                    convert_binder_to_ast binder;
+                    convert_cp_phrase_to_ast cp1;
+                    convert_cp_phrase_to_ast cp2
+                ])
+        
+        and convert_block_to_ast (bindings, expr) : ast =
+            Node ("Block", List.map convert_binding_to_ast bindings @ [convert_phrase_to_ast expr])
+        
+        and convert_binder_to_ast (binder : Sugartypes.Binder.with_pos) : ast =
+            let open Sugartypes.Binder in
+            Node ("Binder", [
+                Leaf ("Name: " ^ to_name binder);
+                Leaf ("Type: " ^ Types.string_of_datatype (to_type binder))
+            ])
+  
+  (* Uses the parser to generate ASTs of Links code *)
+  let parse_code code =
+      let ((bindings, _phrase_opt), _pos) = Parse.parse_string Parse.program code in
+      let ast = Node ("root", List.map convert_binding_to_ast bindings) in
+      Yojson.Safe.to_string (ast_to_yojson ast)
+
+(* Return AST as ast *)
+
+let handle_request code =
+    let ast = parse_code code in
+    ast
+  
+let () =
+Printf.printf "Starting server\n";
+flush stdout;
+let server = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+let addr = Unix.ADDR_INET (Unix.inet_addr_loopback, 8081) in
+Unix.bind server addr;
+Unix.listen server 10;
+Printf.printf "Listening on Port 8081\n";
+flush stdout;
+while true do
+    let (client, _) = Unix.accept server in
+    Printf.printf "Accepted connection\n";
+    flush stdout;
+    let in_channel = Unix.in_channel_of_descr client in
+    let out_channel = Unix.out_channel_of_descr client in
+    try
+        let code = input_line in_channel in
+        Printf.printf "Received code: %s\n" code;
+        flush stdout;
+        let response = handle_request code in
+        (* let json_response = Yojson.Safe.to_string (`List (List.map (fun s -> `String s) response)) in *)
+        (* output_string out_channel (json_response ^ "\n"); *)
+        (* output_string out_channel (Yojson.Safe.to_string response ^ "\n"); *)
+        output_string out_channel (response ^ "\n");
+        flush out_channel;
+      with
+      | End_of_file ->
+        Printf.printf "Client closed connection\n";
+        flush stdout;
+      | exn ->
+        Printf.printf "Error: %s\n" (Printexc.to_string exn);
+        flush stdout;
+      Unix.close client;
+      Printf.printf "Client disconnected\n";
+      flush stdout;
+done
