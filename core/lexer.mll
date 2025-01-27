@@ -214,9 +214,9 @@ rule lex ctxt nl = parse
   | '\n'                                {
         nl ();
         bump_lines lexbuf 1;
-        Printf.printf "Newline: lexbuf.lex_curr_p.pos_cnum: %d\n" lexbuf.lex_curr_p.pos_cnum;
+        (* Printf.printf "Newline: lexbuf.lex_curr_p.pos_cnum: %d\n" lexbuf.lex_curr_p.pos_cnum;
         Printf.printf "Newline: lexbuf.lex_curr_p.pos_lnum: %d\n" lexbuf.lex_curr_p.pos_lnum;
-        Printf.printf "Newline: lexbuf.lex_curr_p.pos_bol: %d\n" lexbuf.lex_curr_p.pos_bol;
+        Printf.printf "Newline: lexbuf.lex_curr_p.pos_bol: %d\n" lexbuf.lex_curr_p.pos_bol; *)
         flush stdout;
         lex ctxt nl lexbuf
       }  

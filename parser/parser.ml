@@ -42,7 +42,7 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
     let open Links_core.CommonTypes in
     let pos_start = Position.start (WithPos.pos phrase) in
     let pos_end = Position.finish (WithPos.pos phrase) in
-    Printf.printf "pos_start.pos_bol: %d\n" pos_start.pos_bol;
+    (* Printf.printf "pos_start.pos_bol: %d\n" pos_start.pos_bol; *)
     let pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
     pos_start.pos_lnum
     (pos_start.pos_cnum - pos_start.pos_bol+2)
@@ -61,7 +61,21 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
         | Query (_, _, p, _) -> Node ("Query", pos_str, [convert_phrase_to_ast p])
         | RangeLit (p1, p2) -> Node ("RangeLit", pos_str, [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
         | ListLit (ps, _) -> Node ("ListLit", pos_str, List.map convert_phrase_to_ast ps)
-        | Iteration (_, p, _, _) -> Node ("Iteration", pos_str, [convert_phrase_to_ast p])
+        | Iteration (generators, p, where, orderby) ->
+            let gen_nodes = List.map (fun gen ->
+                match gen with
+                | List (pat, source) ->
+                    Node ("List", pos_str, [convert_pattern_to_ast pat; convert_phrase_to_ast source])
+                | Table (temp, pat, source) ->
+                    Node ("Table", pos_str, [convert_temporality_to_ast temp pos_str; convert_pattern_to_ast pat; convert_phrase_to_ast source])
+            ) generators in
+            let where_node = match where with
+                | Some w -> [Node ("Where", pos_str, [convert_phrase_to_ast w])]
+                | None -> [] in
+            let orderby_node = match orderby with
+                | Some o -> [Node ("OrderBy", pos_str, [convert_phrase_to_ast o])]
+                | None -> [] in
+            Node ("Iteration", pos_str, gen_nodes @ where_node @ orderby_node @ [convert_phrase_to_ast p])
         | Escape (_, p) -> Node ("Escape", pos_str, [convert_phrase_to_ast p])
         | Section s -> Leaf ("Section: " ^ Section.show s, pos_str)
         | FreezeSection s -> Leaf ("FreezeSection: " ^ Section.show s, pos_str)
@@ -91,13 +105,48 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
         | Receive (cases, _) -> Node ("Receive", pos_str, List.map convert_case_to_ast cases)
         | DatabaseLit (p, _) -> Node ("DatabaseLit", pos_str, [convert_phrase_to_ast p])
         | TableLit t -> Node ("TableLit", pos_str, [convert_table_lit_to_ast t])
-        | DBDelete (_, pat, p, _) -> Node ("DBDelete", pos_str,[convert_pattern_to_ast pat; convert_phrase_to_ast p])
-        | DBInsert (_, p, _, p_opt, popt) -> 
+        (* | DBDelete (_, pat, p, _) -> Node ("DBDelete", pos_str,[convert_pattern_to_ast pat; convert_phrase_to_ast p]) *)
+        | DBDelete (_, pat, p, where_opt) -> 
+            let where_node = match where_opt with
+                | Some where_clause -> [Node ("Where", pos_str, [convert_phrase_to_ast where_clause])]
+                | None -> []
+            in
+            Node ("DBDelete", pos_str, [convert_pattern_to_ast pat; convert_phrase_to_ast p] @ where_node)
+        | DBInsert (_, p, columns, p_opt, popt) -> 
             Node ("DBInsert", pos_str, 
-                [convert_phrase_to_ast p; convert_phrase_to_ast p_opt] @
-                (match popt with Some p -> [convert_phrase_to_ast p] | None -> [])
+            [convert_phrase_to_ast p] @
+            (* (List.map (fun col -> Node ("Column", WithPos.to_string (WithPos.position col), [Leaf (WithPos.node col, WithPos.to_string (WithPos.position col))])) columns) @ *)
+            (* (List.map (fun col -> 
+                (* let pos_start = Position.start (WithPos.pos col) in
+                let pos_end = Position.finish (WithPos.pos col) in
+                let col_pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
+                    pos_start.pos_lnum
+                    (pos_start.pos_cnum - pos_start.pos_bol+2)
+                    pos_end.pos_lnum  
+                    (pos_end.pos_cnum - pos_end.pos_bol+2) 
+                in *)
+                Node ("Column", "", [Leaf (WithPos.node col, "")])
+            ) columns) @ *)
+            (List.map (fun col -> Node ("Column", pos_str, List.map (fun c -> Leaf (c, pos_str)) [col])) columns) @
+            [convert_phrase_to_ast p_opt] @
+            (match popt with Some p -> [convert_phrase_to_ast p] | None -> [])
+    )
+        (* | DBUpdate (_, pat, p, _, fields) -> Node ("DBUpdate", pos_str, convert_pattern_to_ast pat :: convert_phrase_to_ast p :: List.map (fun (name, expr) -> Node (name, pos_str, [convert_phrase_to_ast expr])) fields) *)
+        | DBUpdate (_, pat, p, where_opt, fields) -> 
+            let where_node = match where_opt with
+                | Some where_clause -> [Node ("Where", pos_str, [convert_phrase_to_ast where_clause])]
+                | None -> []
+            in
+            let set_nodes = List.map (fun (name, expr) -> 
+                Node ("SetField", pos_str, [Leaf (name, pos_str); convert_phrase_to_ast expr])
+            ) fields in
+            Node ("DBUpdate", pos_str, 
+                convert_pattern_to_ast pat ::
+                convert_phrase_to_ast p ::
+                where_node @
+                set_nodes
             )
-        | DBUpdate (_, pat, p, _, fields) -> Node ("DBUpdate", pos_str, convert_pattern_to_ast pat :: convert_phrase_to_ast p :: List.map (fun (name, expr) -> Node (name, pos_str, [convert_phrase_to_ast expr])) fields)
+    
         | DBTemporalJoin (_, p, _) -> Node ("DBTemporalJoin", pos_str, [convert_phrase_to_ast p])
         | LensLit (p, _) -> Node ("LensLit", pos_str, [convert_phrase_to_ast p])
         | LensSerialLit (p, _, _) -> Node ("LensSerialLit", pos_str, [convert_phrase_to_ast p])
@@ -122,7 +171,7 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
         | TryInOtherwise (p1, pat, p2, p3, _) -> Node ("TryInOtherwise", pos_str, [convert_phrase_to_ast p1; convert_pattern_to_ast pat; convert_phrase_to_ast p2; convert_phrase_to_ast p3])
         | Raise -> Leaf ("Raise", pos_str)
 
-
+    
 
     (* | Var v -> Leaf ("Var: " ^ v)
     | FunLit (_, _, fnlit, _) -> Node ("FunLit: ", [convert_funlit_to_ast fnlit])
@@ -135,6 +184,12 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
     | _ -> Leaf (show_phrase phrase) *)
   
   (* Helper function to convert a funlit to an AST node *)
+  and convert_temporality_to_ast (temp: CommonTypes.Temporality.t) (pos_str: string) : ast =
+    let open CommonTypes in
+    match temp with
+    | Temporality.Current -> Node ("Current", pos_str, [])
+    | Temporality.Transaction -> Node ("Transaction", pos_str, [])
+    | Temporality.Valid -> Node ("Valid", pos_str, [])
   and convert_funlit_to_ast (fnlit : Sugartypes.funlit) (pos: string) : ast =
     let open Sugartypes in
     (* let open SourceCode in *)
@@ -524,10 +579,11 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
         let open Sugartypes in
         let open CommonTypes in
         let open SourceCode in
-        let tmp = WithPos.make table_lit in
+        let (_, t, _) = table_lit.tbl_type in
+        (* let tmp = WithPos.make t in *)
         (* let pos_str = Position.show (WithPos.pos tmp) in *)
-        let pos_start = Position.start (WithPos.pos tmp) in
-        let pos_end = Position.finish (WithPos.pos tmp) in
+        let pos_start = Position.start (WithPos.pos t) in
+        let pos_end = Position.finish (WithPos.pos t) in
         let pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
         pos_start.pos_lnum
         (pos_start.pos_cnum - pos_start.pos_bol+2)
@@ -656,21 +712,21 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
   let parse_code file_location =
       let open SourceCode in
       (* let ((bindings, _phrase_opt), _pos) = Parse.parse_string Parse.program code in *)
-      Printf.printf("[parse_code] called (1)\n");
+      Printf.printf("[parser.parse_code] Sending file dir to parser\n");
       flush stdout;
       let ((bindings, _phrase_opt), _pos) = Parse.parse_file Parse.program file_location in
-      Printf.printf("[parse_code] called (2)\n");
+      Printf.printf("[parser.parse_code] Successfully retrieved bindings of Links code\n");
       flush stdout;
       (* let tmp = WithPos.make bindings in *)
       (* let pos_str = Position.show (WithPos.pos tmp) in *)
       let start_pos = Position.start (WithPos.pos (List.hd bindings)) in
       let end_pos = Position.finish (WithPos.pos (List.hd (List.rev bindings))) in
-      Printf.printf "[parse_code (start_pos: cnum)] %d\n" start_pos.pos_cnum;
+      (* Printf.printf "[parse_code (start_pos: cnum)] %d\n" start_pos.pos_cnum;
       Printf.printf "[parse_code (start_pos: lnum)] %d\n" start_pos.pos_lnum;
       Printf.printf "[parse_code (start_pos: bol)] %d\n" start_pos.pos_bol;
       Printf.printf "[parse_code (end_pos: cnum)] %d\n" end_pos.pos_cnum;
       Printf.printf "[parse_code (end_pos: lnum)] %d\n" end_pos.pos_lnum;
-      Printf.printf "[parse_code (end_pos: bol)] %d\n" end_pos.pos_bol;
+      Printf.printf "[parse_code (end_pos: bol)] %d\n" end_pos.pos_bol; *)
 
         (* let combined_pos = Position.make ~start:start_pos ~finish:end_pos ~code:None in *)
       (* let pos_str = Position.show combined_pos in *)
@@ -698,7 +754,7 @@ let () =
     Printf.printf "Response: %s\n" response;
     flush stdout; *)
   
-let () =
+(* let () =
 Printf.printf "Starting server\n";
 flush stdout;
 let server = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
@@ -708,6 +764,7 @@ Unix.listen server 10;
 Printf.printf "Listening on Port 8081\n";
 flush stdout;
 while true do
+    try
     let (client, _) = Unix.accept server in
     Printf.printf "Accepted connection\n";
     flush stdout;
@@ -723,19 +780,115 @@ while true do
         (* output_string out_channel (Yojson.Safe.to_string response ^ "\n"); *)
         output_string out_channel (response ^ "\n");
         flush out_channel;
+        Unix.close client;
+        Printf.printf "Client disconnected\n";
+        flush stdout;
+        close_in_noerr in_channel;
+        close_out_noerr out_channel;
       with
       | End_of_file ->
         Printf.printf "Client closed connection\n";
         flush stdout;
+        Unix.close client;
+        close_in_noerr in_channel;
+        close_out_noerr out_channel;
       | exn ->
         let open Errors in
         let detailed_error = format_exception exn in
+        Unix.close client;
+        close_in_noerr in_channel;
+        close_out_noerr out_channel;
         Printf.printf "Error: %s\n" detailed_error;
         flush stdout;
-      Unix.close client;
-      Printf.printf "Client disconnected\n";
-      flush stdout;
-done
+      with 
+      | exn ->
+        
+        Printf.printf "Server error: %s\n" (Printexc.to_string exn);
+        flush stdout;
+      
+done *)
+
+
+let () = 
+  Printf.printf"[Main] Starting server\n"; 
+  flush stdout; 
+  let server = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in 
+  let addr = Unix.ADDR_INET (Unix.inet_addr_loopback, 8081) in 
+  Unix.bind server addr; 
+  Unix.listen server 10; 
+  Printf.printf "[Main] Listening on Port 8081\n"; 
+  flush stdout; 
+  
+  while true do
+    try
+      let (client, _) = Unix.accept server in
+      (* Wrap everything in a function to ensure cleanup *)
+      let process_client () =
+        Printf.printf "[Main] Accepted connection\n";
+        flush stdout;
+        
+        (* Use with_open_in and with_open_out to auto-close *)
+        let in_channel = Unix.in_channel_of_descr client in
+        let out_channel = Unix.out_channel_of_descr client in
+        
+        try
+          let file_location = input_line in_channel in
+          Printf.printf "[Main] Received code: %s\n" file_location;
+          flush stdout;
+          
+          let response = handle_request file_location in
+          output_string out_channel (response ^ "\n");
+          flush out_channel;
+          Printf.printf "[Main] Finished parsing code\n";
+          flush stdout;
+
+          (* Printf.printf "AST: %s\n" response;
+          flush stdout; *)
+          (* close_in in_channel;
+          close_out out_channel; *)
+        
+        (* Ensure cleanup in all error scenarios *)
+        with 
+        | End_of_file -> 
+            Printf.printf "[Main] Client closed connection\n";
+            flush stdout;
+            (* close_in in_channel;
+            close_out out_channel; *)
+        | exn ->
+            let detailed_error = Errors.format_exception exn in
+            Printf.printf "[Main] Error: %s\n" detailed_error;
+            flush stdout
+      in
+      
+      (* Run client processing *)
+      process_client ();
+      
+      (* Guaranteed cleanup *)
+      Unix.close client
+    
+    with exn ->
+      Printf.printf "[Main] Server error: %s\n" (Printexc.to_string exn);
+      
+      flush stdout
+  done
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 (* 
 let () =
   Printf.printf "Starting server\n";

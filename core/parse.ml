@@ -31,7 +31,7 @@ module LinksParser = Scanner (LinksLexer)
 (* let reader_of_channel channel buffer = input channel buffer 0 *)
 (* My implementation V *)
 let reader_of_channel channel =
-  Printf.printf("reader_of_channel called\n");
+  (* Printf.printf("reader_of_channel called\n"); *)
   let current_pos = ref 0 in
   let line_start = ref 0 in
   let lexbuf = Lexing.from_channel channel in
@@ -39,10 +39,10 @@ let reader_of_channel channel =
     let nchars = input channel buffer 0 nchars in
     for i = 0 to nchars - 1 do
       if Bytes.get buffer i = '\n' then begin
-        Printf.printf("encountered new line\n");
+        (* Printf.printf("encountered new line\n"); *)
         line_start := !current_pos + i + 1;
         lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with pos_bol = !line_start };
-        Printf.printf "pos_bol updated to %d\n" lexbuf.lex_curr_p.pos_bol;
+        (* Printf.printf "pos_bol updated to %d\n" lexbuf.lex_curr_p.pos_bol; *)
       end;
     done;
     current_pos := !current_pos + nchars;
@@ -66,10 +66,10 @@ let reader_of_string ?pp string =
         let nchars = min nchars (String.length string - !current_pos) in
         Bytes.blit (Bytes.of_string string) !current_pos buffer 0 nchars;
         for i = 0 to nchars - 1 do
-          Printf.printf("current_pos: %d\n") !current_pos;
+          (* Printf.printf("current_pos: %d\n") !current_pos; *)
           flush stdout;
           if Bytes.get buffer i = '\n' then begin
-            Printf.printf("encountered new line");
+            (* Printf.printf("encountered new line"); *)
             flush stdout;
             line_start := !current_pos + i + 1
           end;
@@ -135,15 +135,21 @@ let parse_string ?(pp=default_preprocessor ()) ?in_context:context grammar strin
       ~infun:(reader_of_string ?pp string) ~name:"<string>" ~context ()
 
 let parse_channel ?interactive ?in_context:context grammar (channel, name) =
-  Printf.printf("[parse] parse_channel called\n");
+  Printf.printf("[parse.parse_channel] called\n");
   flush stdout;
-  Printf.printf "name: %s\n" name;
+  Printf.printf "[parse.parse_channel] file dir: %s\n" name;
   let context = LinksParser.normalize_context context in
-    LinksParser.read ?nlhook:interactive ~parse:grammar
-      ~infun:(reader_of_channel channel) ~name:name ~context ()
+  let result = LinksParser.read ?nlhook:interactive ~parse:grammar
+      ~infun:(reader_of_channel channel) ~name:name ~context () in
+  Printf.printf "[parse.parse_channel] Closing channel\n";
+  flush stdout;
+  close_in channel;
+  result
+  
+
 
 let parse_file ?(pp=default_preprocessor ()) ?in_context:context grammar filename =
-  Printf.printf("[parse] parse_file called (before match)\n");
+  Printf.printf("[parse.parse_file] parse_file called (before match)\n");
   flush stdout;
   match normalize_pp pp with
     | None -> parse_channel ?in_context:context grammar (open_in filename, filename)

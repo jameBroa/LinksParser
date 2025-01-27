@@ -28,14 +28,14 @@ module Scanner (Lex : LexerSig) = struct
     let lexbuf = {(from_function (code#parse_into infun))
                  with lex_curr_p={pos_fname=name; pos_lnum=1; pos_bol=0; pos_cnum=0}} in
     try
-      Printf.printf("(before) lexbuf.lex_curr_p.pos_cnum: %d\n") lexbuf.lex_curr_p.pos_cnum;
+      (* Printf.printf("(before) lexbuf.lex_curr_p.pos_cnum: %d\n") lexbuf.lex_curr_p.pos_cnum;
       Printf.printf("(before) lexbuf.lex_curr_p.pos_lnum: %d\n") lexbuf.lex_curr_p.pos_lnum;
-      Printf.printf("(before) lexbuf.lex_curr_p.pos_bol: %d\n") lexbuf.lex_curr_p.pos_bol;
+      Printf.printf("(before) lexbuf.lex_curr_p.pos_bol: %d\n") lexbuf.lex_curr_p.pos_bol; *)
       let p = parse (Lex.lexer context ~newline_hook:(from_option identity nlhook)) lexbuf in
-      Printf.printf("\n");
+      (* Printf.printf("\n");
       Printf.printf("(after) lexbuf.lex_curr_p.pos_cnum: %d\n") lexbuf.lex_curr_p.pos_cnum;
       Printf.printf("(after) lexbuf.lex_curr_p.pos_lnum: %d\n") lexbuf.lex_curr_p.pos_lnum;
-      Printf.printf("(after) lexbuf.lex_curr_p.pos_bol: %d\n") lexbuf.lex_curr_p.pos_bol;
+      Printf.printf("(after) lexbuf.lex_curr_p.pos_bol: %d\n") lexbuf.lex_curr_p.pos_bol; *)
 
       (p, code)
     with
