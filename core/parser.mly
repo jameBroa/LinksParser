@@ -812,11 +812,42 @@ xml:
 | LXML attr_list block? SLASHRXML                              { xml ~ppos:$loc $1 $2 $3 []                }
 | LXML attr_list block? RXML xml_contents* ENDTAG              { xml ~ppos:$loc $1 $2 $3 $5 ~tags:($1, $6) }
 
+// | LXML attr_list block? RXML xml_contents* ENDTAG              { 
+//   let start_pos = fst $loc in
+//   let end_pos = snd $loc in
+
+//     let new_loc = (start_pos, end_pos) in
+//     Printf.printf "\n\n";
+// Printf.printf "Start line num: %d start cnum:%d start bol: %d, End lnum: %dend cnum:%d end bol: %d\n"
+//       start_pos.pos_lnum (start_pos.pos_cnum - start_pos.pos_bol) start_pos.pos_bol
+//       end_pos.pos_lnum (end_pos.pos_cnum - end_pos.pos_bol) end_pos.pos_bol;  
+//       Printf.printf "\n\n";
+
+//       flush stdout;
+
+//   xml ~ppos:new_loc $1 $2 $3 $5 ~tags:($1, $6) 
+//   }
+
+
 xml_contents:
 | block                                                        { $1 }
 | formlet_binding | formlet_placement | page_placement
 | xml                                                          { $1 }
-| CDATA                                                        { with_pos $loc (TextNode (Utility.xml_unescape $1)) }
+
+// | CDATA                                                        { with_pos $loc (TextNode (Utility.xml_unescape $1)) }
+| CDATA {
+    let unescaped_text = Utility.xml_unescape $1 in
+    let lines = String.split_on_char '\n' unescaped_text in
+    let adjusted_text = String.concat "\n" (List.map String.trim lines) in
+    let start_pos = fst $loc in
+    let end_pos = {
+      start_pos with
+      pos_lnum = start_pos.pos_lnum + List.length lines - 1;
+      pos_cnum = start_pos.pos_bol + String.length (List.hd (List.rev lines))
+    } in
+    let new_loc = (start_pos, end_pos) in
+    with_pos new_loc (TextNode adjusted_text)
+}
 
 formlet_binding:
 | LBRACE logical_expression RARROW pattern RBRACE              { with_pos $loc (FormBinding($2, $4)) }

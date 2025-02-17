@@ -25,9 +25,50 @@
   let fresh_context () = new lexer_context
 
   let bump_lines lexbuf n =
-    lexbuf.lex_curr_p <- {lexbuf.lex_curr_p with pos_lnum = lexbuf.lex_curr_p.pos_lnum + n}
+    Printf.printf "bump_lines: n = %d\n" n;
+    flush stdout;
+    lexbuf.lex_curr_p <- {
+      lexbuf.lex_curr_p with 
+      pos_lnum = lexbuf.lex_curr_p.pos_lnum + n;
+      pos_bol = lexbuf.lex_curr_p.pos_cnum+1;
+      }
 
   let count_newlines = StringUtils.count '\n'
+
+  (* let bump_lines lexbuf lexeme =
+  (* Count newlines in the lexeme *)
+  let nl_count = StringUtils.count '\n' lexeme in
+  (* Find the position of the last newline in the lexeme, if any *)
+  let last_nl_pos =
+    try Some (String.rindex lexeme '\n')
+    with Not_found -> None
+  in
+  lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with
+    pos_lnum = lexbuf.lex_curr_p.pos_lnum + nl_count;
+    pos_bol = match last_nl_pos with
+      | Some idx -> lexbuf.lex_curr_p.pos_cnum - (String.length lexeme - idx - 1)
+      | None -> lexbuf.lex_curr_p.pos_bol
+  } *)
+
+  (* let bump_lines lexbuf lexeme =
+  let nl_count = StringUtils.count '\n' lexeme in
+  match String.rindex_opt lexeme '\n' with
+  | Some last_nl_pos ->
+      let after_newline = String.sub lexeme (last_nl_pos + 1) (String.length lexeme - last_nl_pos - 1) in
+      let indent = String.length after_newline in
+      let new_pos = lexbuf.lex_curr_p.pos_cnum + String.length lexeme in
+      lexbuf.lex_curr_p <- {
+        lexbuf.lex_curr_p with
+        pos_lnum = lexbuf.lex_curr_p.pos_lnum + nl_count;
+        pos_bol = new_pos - indent;  (* Calculate from the new position *)
+        pos_cnum = new_pos;  (* Update current position *)
+      }
+  | None -> 
+      lexbuf.lex_curr_p <- {
+        lexbuf.lex_curr_p with
+        pos_cnum = lexbuf.lex_curr_p.pos_cnum + String.length lexeme
+      } *)
+
 
   exception LexicalError of (string * Lexing.position)
 }

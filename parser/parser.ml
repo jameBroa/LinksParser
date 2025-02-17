@@ -197,7 +197,10 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
     (* let pos_str = Position.show (WithPos.pos pos) in *)
     match fnlit with
     | NormalFunlit (args, body) ->
-        Node ("NormalFunlit", pos, List.flatten (List.map (List.map convert_pattern_to_ast) args) @ [convert_phrase_to_ast body])
+        let arg_nodes = List.flatten (List.map (List.map convert_pattern_to_ast) args) in
+        let body_node = convert_phrase_to_ast body in
+        Node ("NormalFunlit", pos, arg_nodes @ [body_node])
+        (* Node ("NormalFunlit", pos, List.flatten (List.map (List.map convert_pattern_to_ast) args) @ [convert_phrase_to_ast body]) *)
     | SwitchFunlit (args, body) ->
         Node ("SwitchFunlit", pos, List.flatten (List.map (List.map convert_pattern_to_ast) args) @ [convert_switch_body_to_ast body])
   
@@ -214,8 +217,15 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
     pos_end.pos_lnum  
     (pos_end.pos_cnum - pos_end.pos_bol+2) 
     in
+    Printf.printf "Variable position: %s\n" pos_str;
     match WithPos.node pattern with
-    | Variable bndr -> Leaf ("Variable: " ^ (Sugartypes.Binder.to_name bndr), pos_str)
+    | Variable bndr -> 
+        Leaf ("Variable: " ^ (Sugartypes.Binder.to_name bndr), pos_str)
+    | Record (fields, None) ->
+        let children = List.map (fun (_, var) ->
+            convert_pattern_to_ast var
+          ) fields in
+          Node ("Record" , pos_str, children)
     | node -> Leaf ((show node), pos_str)
   
   (* Helper function to convert a switch body to an AST node *)
@@ -249,13 +259,40 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
     in
     match WithPos.node binding with
         | Val (pat, (_, rhs), _, _) -> 
+            flush stdout;
             Node ("Val", pos_str, [convert_pattern_to_ast pat; convert_phrase_to_ast rhs])
-        | Fun { fun_binder; fun_definition = (_, fn); _ } ->
-            Node ("Fun", pos_str, [Leaf ("Binder: " ^ (Binder.to_name fun_binder), pos_str); convert_funlit_to_ast fn pos_str])
+        | Fun { fun_binder; fun_definition = (_, fn); fun_signature; _ } ->
+            (* let fun_start = Position.start (WithPos.pos fun_binder) in
+            let fun_end = Position.finish (WithPos.pos fun_binder) in
+            let fun_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
+            fun_start.pos_lnum
+            (fun_start.pos_cnum - fun_start.pos_bol+2)
+            fun_end.pos_lnum  
+            (fun_end.pos_cnum - fun_end.pos_bol+2) 
+            in *)
+            let sig_node = match fun_signature with
+                | Some sig_ -> 
+                    let (dt_w_pos, _) = sig_ in
+                    Node ("Signature", pos_str, [convert_datatype_to_ast dt_w_pos])
+                | None -> Leaf ("No signature", pos_str)
+            in
+            Node ("Fun", pos_str, [
+                Leaf ("Binder: " ^ (Binder.to_name fun_binder), pos_str); 
+                convert_funlit_to_ast fn pos_str;
+                sig_node;
+                ])
         | Funs funs ->
             Node ("Funs", pos_str, List.map (fun fun_def ->
                 let { rec_binder; rec_definition = (_, fn); _ } = WithPos.node fun_def in
-                Node ("Fun", pos_str, [Leaf ("Binder: " ^ (Binder.to_name rec_binder), pos_str); convert_funlit_to_ast fn pos_str])
+                let fun_pos_start = Position.start(WithPos.pos fun_def) in
+                let fun_pos_end = Position.finish(WithPos.pos fun_def) in
+                let fun_pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}"
+                fun_pos_start.pos_lnum
+                (fun_pos_start.pos_cnum - fun_pos_start.pos_bol+2)
+                fun_pos_end.pos_lnum
+                (fun_pos_end.pos_cnum - fun_pos_end.pos_bol+2)
+                in
+                Node ("Fun", fun_pos_str, [Leaf ("Binder: " ^ (Binder.to_name rec_binder), fun_pos_str); convert_funlit_to_ast fn fun_pos_str])
             ) funs)
         | Foreign alien ->
             let (binder, (_, datatype_opt)) = Alien.declaration alien in
@@ -840,6 +877,8 @@ let () =
           output_string out_channel (response ^ "\n");
           flush out_channel;
           Printf.printf "[Main] Finished parsing code\n";
+          flush stdout;
+          Printf.printf "[Main] Response: %s\n" response;
           flush stdout;
 
           (* Printf.printf "AST: %s\n" response;
