@@ -798,7 +798,31 @@ attr_list:
 | attr*                                                        { $1 }
 
 attr:
-| xmlid EQ LQUOTE attr_val RQUOTE                              { ($1, $4) }
+| xmlid EQ LQUOTE attr_val RQUOTE                              {
+
+  let xmlid_pos_start = fst $loc($1) in
+  let xmlid_pos_end = snd $loc($1) in
+
+
+  let start_pos = fst $loc($4) in 
+  let end_pos = snd $loc($4) in
+  let new_pos = (xmlid_pos_start, xmlid_pos_end) in
+
+  let ret = List.map(fun phrase ->
+    with_pos new_pos (WithPos.node phrase)
+  ) $4 in
+
+
+  Printf.printf "[ATTR] id start pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" xmlid_pos_start.pos_lnum (xmlid_pos_start.pos_cnum) xmlid_pos_start.pos_bol;
+  Printf.printf "[ATTR] id end pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" xmlid_pos_end.pos_lnum (xmlid_pos_end.pos_cnum) xmlid_pos_end.pos_bol;
+
+
+  Printf.printf "[ATTR] start pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" start_pos.pos_lnum (start_pos.pos_cnum) start_pos.pos_bol;
+  Printf.printf "[ATTR] end pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" end_pos.pos_lnum (end_pos.pos_cnum) end_pos.pos_bol;
+
+   ($1, ret) 
+   
+   }
 | xmlid EQ LQUOTE RQUOTE                                       { ($1, [constant_str ~ppos:$loc($3) ""]) }
 
 attr_val:
@@ -810,44 +834,32 @@ attr_val_entry:
 
 xml:
 | LXML attr_list block? SLASHRXML                              { xml ~ppos:$loc $1 $2 $3 []                }
-| LXML attr_list block? RXML xml_contents* ENDTAG              { xml ~ppos:$loc $1 $2 $3 $5 ~tags:($1, $6) }
+| LXML attr_list block? RXML xml_contents* ENDTAG              {
 
-// | LXML attr_list block? RXML xml_contents* ENDTAG              { 
-//   let start_pos = fst $loc in
-//   let end_pos = snd $loc in
+  List.iter (fun (name, phrases) ->
+      List.iter (fun phrase ->
+        let supposed_start = Position.start(WithPos.pos phrase) in
+        let supposed_end = Position.finish(WithPos.pos phrase) in
 
-//     let new_loc = (start_pos, end_pos) in
-//     Printf.printf "\n\n";
-// Printf.printf "Start line num: %d start cnum:%d start bol: %d, End lnum: %dend cnum:%d end bol: %d\n"
-//       start_pos.pos_lnum (start_pos.pos_cnum - start_pos.pos_bol) start_pos.pos_bol
-//       end_pos.pos_lnum (end_pos.pos_cnum - end_pos.pos_bol) end_pos.pos_bol;  
-//       Printf.printf "\n\n";
+        Printf.printf "[OLD] name: %s\n" name;
+        Printf.printf "[OLD] start pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" supposed_start.pos_lnum supposed_start.pos_cnum supposed_start.pos_bol;
+        Printf.printf "[OLD] end pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" supposed_end.pos_lnum supposed_end.pos_cnum supposed_end.pos_bol;
+        flush stdout;
+      ) phrases
+    ) $2;
 
-//       flush stdout;
 
-//   xml ~ppos:new_loc $1 $2 $3 $5 ~tags:($1, $6) 
-//   }
 
+
+
+   xml ~ppos:$loc $1 $2 $3 $5 ~tags:($1, $6) 
+   }
 
 xml_contents:
 | block                                                        { $1 }
 | formlet_binding | formlet_placement | page_placement
 | xml                                                          { $1 }
-
-// | CDATA                                                        { with_pos $loc (TextNode (Utility.xml_unescape $1)) }
-| CDATA {
-    let unescaped_text = Utility.xml_unescape $1 in
-    let lines = String.split_on_char '\n' unescaped_text in
-    let adjusted_text = String.concat "\n" (List.map String.trim lines) in
-    let start_pos = fst $loc in
-    let end_pos = {
-      start_pos with
-      pos_lnum = start_pos.pos_lnum + List.length lines - 1;
-      pos_cnum = start_pos.pos_bol + String.length (List.hd (List.rev lines))
-    } in
-    let new_loc = (start_pos, end_pos) in
-    with_pos new_loc (TextNode adjusted_text)
-}
+| CDATA                                                        { with_pos $loc (TextNode (Utility.xml_unescape $1)) }
 
 formlet_binding:
 | LBRACE logical_expression RARROW pattern RBRACE              { with_pos $loc (FormBinding($2, $4)) }

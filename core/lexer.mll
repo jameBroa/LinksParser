@@ -42,10 +42,6 @@ class lexer_context =
 object
   val          lexers = Stack.create ()
 
-  val mutable line_bol = 0  
-  method get_line_bol = line_bol
-  method set_line_bol pos = line_bol <- pos
-
   method push_lexer (lexer : Lexing.lexbuf -> Parser.token) =
     Stack.push lexer lexers
 
@@ -79,16 +75,19 @@ end
 
 let fresh_context () = new lexer_context
 
+
+
 let bump_lines lexbuf n =
   lexbuf.lex_curr_p <- {
     lexbuf.lex_curr_p with 
     pos_lnum = lexbuf.lex_curr_p.pos_lnum + n;
-    pos_bol = lexbuf.lex_curr_p.pos_cnum + 1;
+    pos_bol = if n > 0 then lexbuf.lex_curr_p.pos_cnum else lexbuf.lex_curr_p.pos_bol
   }
 
-let count_newlines = StringUtils.count '\n'
 
+let count_newlines = StringUtils.count '\n'
 let count_spaces = StringUtils.count ' '
+
 
 let keywords = [
  "alien"    , ALIEN;
@@ -217,36 +216,7 @@ rule lex ctxt nl = parse
   | '#' ([^ '\n'] *)                    { lex ctxt nl lexbuf }
   | ';'                                 { SEMICOLON }
   | directive_prefix (def_id as id)     { KEYWORD id}
-  | '\n'                                {
-        nl ();
-        bump_lines lexbuf 1;
-        (* Printf.printf "Newline: lexbuf.lex_curr_p.pos_cnum: %d\n" lexbuf.lex_curr_p.pos_cnum;
-        Printf.printf "Newline: lexbuf.lex_curr_p.pos_lnum: %d\n" lexbuf.lex_curr_p.pos_lnum;
-        Printf.printf "Newline: lexbuf.lex_curr_p.pos_bol: %d\n" lexbuf.lex_curr_p.pos_bol; *)
-        ctxt#set_line_bol lexbuf.lex_curr_p.pos_bol;
-        flush stdout;
-        lex ctxt nl lexbuf
-      }
-  (* | [' ' '\t']* as spaces {
-    let pos = lexbuf.Lexing.lex_curr_p in
-    Printf.printf "[spaces (before)] lnum: %d, cnum: %d, bol: %d\n"
-      pos.Lexing.pos_lnum
-      pos.Lexing.pos_cnum
-      pos.Lexing.pos_bol;
-    flush stdout;
-      let len = String.length spaces in
-      lexbuf.lex_curr_p <- {
-        lexbuf.lex_curr_p with
-        pos_cnum = lexbuf.lex_curr_p.pos_cnum + len;
-      };
-      let pos = lexbuf.Lexing.lex_curr_p in
-    Printf.printf "[spaces (before)] lnum: %d, cnum: %d, bol: %d\n"
-      pos.Lexing.pos_lnum
-      pos.Lexing.pos_cnum
-      pos.Lexing.pos_bol;
-    flush stdout;
-      lex ctxt nl lexbuf
-    }   *)
+  | '\n'                                { nl (); bump_lines lexbuf 1; lex ctxt nl lexbuf }
   | '_'                                 { UNDERSCORE }
   | '='                                 { EQ }
   | "->"                                { RARROW }
@@ -270,41 +240,17 @@ rule lex ctxt nl = parse
   | "<-"                                { LARROW }
   | "<|"                                { LEFTTRIANGLE }
   | "|>"                                { RIGHTTRIANGLE }
-  (* | '<' (def_tagname as id)             
-  { 
-    let pos = lexbuf.Lexing.lex_curr_p in
-    Printf.printf "[Lexer] lnum: %d, cnum: %d, bol: %d\n"
-      pos.Lexing.pos_lnum
-      pos.Lexing.pos_cnum
-      pos.Lexing.pos_bol;
-    flush stdout;
-    if ctxt#effect_mode && Char.isUpper id.[0]
-    then (
-      ctxt#enter_effect_pattern;
-      ctxt#push_token (CONSTRUCTOR id);
-      OPERATOR "<")
-    else (
-      (* come back here after scanning the start tag *)
-      ctxt#push_lexer (starttag ctxt nl); LXML id) 
-                                            
-  } *)
-  | '<' (def_tagname as id)             
-  { 
-    let startpos = { lexbuf.Lexing.lex_curr_p with pos_bol = ctxt#get_line_bol } in
-    Printf.printf "[Lexer] lnum: %d, cnum: %d, bol: %d\n"
-      startpos.Lexing.pos_lnum
-      startpos.Lexing.pos_cnum
-      startpos.Lexing.pos_bol;
-    flush stdout;
-    if ctxt#effect_mode && Char.isUpper id.[0]
-    then (
-      ctxt#enter_effect_pattern;
-      ctxt#push_token (CONSTRUCTOR id);
-      OPERATOR "<")
-    else (
-      (* come back here after scanning the start tag *)
-      ctxt#push_lexer (starttag ctxt nl startpos); LXML id) 
-  }
+  | '<' (def_tagname as id)             { if ctxt#effect_mode && Char.isUpper id.[0]
+                                          then (
+                                            ctxt#enter_effect_pattern;
+                                            ctxt#push_token (CONSTRUCTOR id);
+                                            OPERATOR "<")
+                                          else (
+                                            (* come back here after scanning the start tag *)
+                                            Printf.printf "[start_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n" lexbuf.lex_start_p.pos_lnum lexbuf.lex_start_p.pos_cnum lexbuf.lex_start_p.pos_bol;
+                                            Printf.printf "[curr_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n\n" lexbuf.lex_curr_p.pos_lnum lexbuf.lex_curr_p.pos_cnum lexbuf.lex_curr_p.pos_bol;
+                                            flush stdout;
+                                            ctxt#push_lexer (starttag ctxt nl); LXML id) }
   | "<!--"                              { xmlcomment_lex ctxt nl lexbuf }
   | "[|"                                { LBRACKETBAR }
   | "|]"                                { BARRBRACKET }
@@ -355,7 +301,8 @@ rule lex ctxt nl = parse
   | "vt_insert"                         { ctxt#push_lexer (ins_qual ctxt nl); VTINSERT }
   | "tt_insert"                         { ctxt#push_lexer (ins_qual ctxt nl); TTINSERT }
   | "delete"                            { ctxt#push_lexer (upd_qual ctxt nl); DELETE }
-  | def_id as var                       { try
+  | def_id as var                       {   
+try
                                             let keyword = List.assoc var keywords in
                                             ignore (match keyword with CASE when not ctxt#effect_mode -> ctxt#toggle | _ -> ());
                                             keyword
@@ -383,16 +330,21 @@ and ins_qual ctxt nl = parse
                                             if Char.isUpper var.[0] then CONSTRUCTOR var
                                             else VARIABLE var }
   | _                                   { raise (LexicalError (lexeme lexbuf, lexeme_end_p lexbuf)) }
-and starttag ctxt nl startpos = parse
+and starttag ctxt nl = parse
   | eof                                 { EOF }
-  | def_qname as var                    {
-    Printf.printf "[StartTag] lnum: %d, cnum: %d, bol: %d\n"
-      startpos.Lexing.pos_lnum
-      startpos.Lexing.pos_cnum
-      startpos.Lexing.pos_bol;
-    flush stdout;VARIABLE var }
+  | def_qname as var                    {   
+    Printf.printf "STRING: \"%s\"\n" var;
+    Printf.printf "(line: %d, cnum %d, bool: %d)\n" lexbuf.lex_start_p.pos_lnum lexbuf.lex_start_p.pos_cnum lexbuf.lex_start_p.pos_bol;
+    Printf.printf "(line: %d, cnum %d, bool: %d)\n" lexbuf.lex_curr_p.pos_lnum lexbuf.lex_curr_p.pos_cnum lexbuf.lex_curr_p.pos_bol;
+
+    VARIABLE var 
+    }
   | '='                                 { EQ }
-  | '#' ([^ '\n'] *)                    { starttag ctxt nl startpos lexbuf }
+  | '#' ([^ '\n'] *)                    { starttag ctxt nl lexbuf }
+  | [ '\t']+  { 
+    lexbuf.lex_start_p <- lexbuf.lex_curr_p; 
+    starttag ctxt nl lexbuf 
+}
   | '>'                                 { (* Switch to `xmllex' *)
                                           ctxt#pop_lexer;  ctxt#push_lexer (xmllex ctxt nl); RXML }
   | '"'                                 { (* Come back here after scanning the attr value *)
@@ -400,12 +352,12 @@ and starttag ctxt nl startpos = parse
   | '{'                                 { (* Come back here after scanning the attribute block *)
                                           ctxt#push_lexer (lex ctxt nl); LBRACE }
   | "/>"                                { ctxt#pop_lexer (* fall back *); SLASHRXML }
-  | '\n'                                { nl () ; bump_lines lexbuf 1; starttag ctxt nl startpos lexbuf  }
-  | def_blank                           { starttag ctxt nl startpos lexbuf  }
+  | '\n'                                { nl () ; bump_lines lexbuf 1; starttag ctxt nl lexbuf }
+  | def_blank                           { starttag ctxt nl lexbuf }
   | _                                   { raise (LexicalError (lexeme lexbuf, lexeme_end_p lexbuf)) }
 and xmlcomment_lex ctxt nl = parse
   | "-->"                               { ctxt#next_lexer lexbuf }
-  | '\n'                                { nl() ; bump_lines lexbuf 1;  xmlcomment_lex ctxt nl lexbuf }
+  | '\n'                                { nl() ; bump_lines lexbuf 1; xmlcomment_lex ctxt nl lexbuf }
   | eof                                 { raise (LexicalError (lexeme lexbuf, lexeme_end_p lexbuf)) }
   | "--"                                { raise (LexicalError (lexeme lexbuf, lexeme_end_p lexbuf)) }
   | _                                   { xmlcomment_lex ctxt nl lexbuf }
@@ -415,7 +367,13 @@ and xmllex ctxt nl = parse
   | "{{"                                { CDATA "{" }
   | "}}"                                { CDATA "}" }
   | "}"                                 { raise (LexicalError (lexeme lexbuf, lexeme_end_p lexbuf)) }
-  | [^ '{' '}' '<' '&']* as cdata       { bump_lines lexbuf (count_newlines cdata); ctxt#set_line_bol (lexbuf.lex_curr_p.pos_bol - (count_spaces cdata) - 1); CDATA cdata }
+  | [^ '{' '}' '<' '&' ]* as cdata      { 
+    bump_lines lexbuf (count_newlines cdata); 
+    let new_bol = (lexbuf.Lexing.lex_curr_p.pos_bol - ((count_spaces cdata) - 1)) in
+    let pos = { lexbuf.Lexing.lex_curr_p with pos_bol = new_bol } in
+    lexbuf.Lexing.lex_curr_p <- pos;
+    CDATA cdata
+  }
   | "&amp;"                             { CDATA "&" }
   | "&lt;"                              { CDATA "<" }
   | "&gt;"                              { CDATA ">" }
@@ -424,31 +382,22 @@ and xmllex ctxt nl = parse
   | '{'                                 { (* scan the expression, then back here *)
                                           ctxt#push_lexer (lex ctxt nl); LBRACE }
   | "</" (def_tagname as var) '>'       { (* fall back *)
-  let pos = { lexbuf.Lexing.lex_curr_p with pos_bol = ctxt#get_line_bol } in
-  lexbuf.Lexing.lex_curr_p <- pos;
-    Printf.printf "[EndTag] lnum: %d, cnum: %d, bol: %d\n"
-      pos.Lexing.pos_lnum
-      pos.Lexing.pos_cnum
-      pos.Lexing.pos_bol;
-    flush stdout;
                                           ctxt#pop_lexer; ENDTAG var }
-  | '<' (def_tagname as var)            { 
-    let startpos = { lexbuf.Lexing.lex_start_p with pos_bol = ctxt#get_line_bol } in
-    lexbuf.Lexing.lex_start_p <- startpos;
-    Printf.printf "[StartTag] lnum: %d, cnum: %d, bol: %d\n"
-      startpos.Lexing.pos_lnum
-      startpos.Lexing.pos_cnum
-      startpos.Lexing.pos_bol;
-    flush stdout;(* switch to `starttag' to handle the nested xml, then back here *)
-                                          ctxt#push_lexer (starttag ctxt nl startpos); LXML var }
+  | '<' (def_tagname as var)            { (* switch to `starttag' to handle the nested xml, then back here *)
+                                          Printf.printf "[start_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n" lexbuf.lex_start_p.pos_lnum lexbuf.lex_start_p.pos_cnum lexbuf.lex_start_p.pos_bol;
+                                          Printf.printf "[curr_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n\n" lexbuf.lex_curr_p.pos_lnum lexbuf.lex_curr_p.pos_cnum lexbuf.lex_curr_p.pos_bol;
+                                          ctxt#push_lexer (starttag ctxt nl); LXML var }
   | _                                   { raise (LexicalError (lexeme lexbuf, lexeme_end_p lexbuf)) }
 and attrlex ctxt nl = parse
   | eof                                 { EOF }
   | '"'                                 { (* fall back *)
+  Printf.printf "[start_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n" lexbuf.lex_start_p.pos_lnum lexbuf.lex_start_p.pos_cnum lexbuf.lex_start_p.pos_bol;
+                                          Printf.printf "[curr_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n\n" lexbuf.lex_curr_p.pos_lnum lexbuf.lex_curr_p.pos_cnum lexbuf.lex_curr_p.pos_bol;
                                           ctxt#pop_lexer; RQUOTE }
   | '{'                                 { (* scan the expression, then back here *)
                                           ctxt#push_lexer (lex ctxt nl); LBRACE }
-  | [^ '{' '"']* as string              { bump_lines lexbuf (count_newlines string); STRING string }
+  | '\n'                                { nl (); bump_lines lexbuf 1; attrlex ctxt nl lexbuf }
+  | [^ '{' '"']* as string              { bump_lines lexbuf (count_newlines string);  STRING string }
   | _                                   { raise (LexicalError (lexeme lexbuf, lexeme_end_p lexbuf)) }
 and regex' ctxt nl = parse
   | eof                                 { EOF }

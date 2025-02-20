@@ -158,7 +158,25 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
         | LensGetLit (p, _) -> Node ("LensGetLit", pos_str,[convert_phrase_to_ast p])
         | LensCheckLit (p, _) -> Node ("LensCheckLit", pos_str, [convert_phrase_to_ast p])
         | LensPutLit (p1, p2, _) -> Node ("LensPutLit", pos_str,  [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
-        | Xml (name, attrs, expr_opt, children) -> Node ("Xml", pos_str, Leaf (name, pos_str) :: List.map (fun (name, exprs) -> Node (name, pos_str, List.map convert_phrase_to_ast exprs)) attrs @ (match expr_opt with Some expr -> [convert_phrase_to_ast expr] | None -> []) @ List.map convert_phrase_to_ast children)
+        | Xml (name, attrs, expr_opt, children) -> 
+            Node ("Xml", pos_str, Leaf (name, pos_str) :: 
+            List.map (fun (name, exprs) ->
+                let head_expr = List.hd exprs in
+                let expr_pos_start = Position.start (WithPos.pos head_expr) in
+                let expr_pos_end = Position.finish (WithPos.pos head_expr) in
+                let expr_pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
+                expr_pos_end.pos_lnum  
+                (expr_pos_start.pos_cnum - expr_pos_start.pos_bol+2)
+                expr_pos_end.pos_lnum  
+                (expr_pos_start.pos_cnum - expr_pos_start.pos_bol+2+(String.length name))
+                in
+                Node (("Attribute: " ^ name), expr_pos_str, List.map convert_phrase_to_ast (List.tl exprs))
+            ) attrs @ 
+            (match expr_opt with 
+             | Some expr -> [convert_phrase_to_ast expr] 
+             | None -> []
+             ) @ 
+            List.map convert_phrase_to_ast children)
         | TextNode text -> Leaf ("TextNode: " ^ text, pos_str)
         | Formlet (p1, p2) -> Node ("Formlet", pos_str, [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
         | Page p -> Node ("Page", pos_str, [convert_phrase_to_ast p])
