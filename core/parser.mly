@@ -813,6 +813,7 @@ attr:
   ) $4 in
 
 
+  
   Printf.printf "[ATTR] id start pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" xmlid_pos_start.pos_lnum (xmlid_pos_start.pos_cnum) xmlid_pos_start.pos_bol;
   Printf.printf "[ATTR] id end pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" xmlid_pos_end.pos_lnum (xmlid_pos_end.pos_cnum) xmlid_pos_end.pos_bol;
 
@@ -829,8 +830,30 @@ attr_val:
 | attr_val_entry+                                              { $1 }
 
 attr_val_entry:
-| block                                                        { $1 }
-| STRING                                                       { constant_str ~ppos:$loc $1 }
+| block                                                        {
+  let xmlid_pos_start = fst $loc($1) in
+  let xmlid_pos_end = snd $loc($1) in
+  Printf.printf "[BLOCK] block start pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" xmlid_pos_start.pos_lnum (xmlid_pos_start.pos_cnum) xmlid_pos_start.pos_bol;
+  Printf.printf "[BLOCK] block end pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" xmlid_pos_end.pos_lnum (xmlid_pos_end.pos_cnum) xmlid_pos_end.pos_bol;
+
+
+   $1 
+   
+   }
+| STRING                                                       { 
+  Printf.printf "value? %s\n" $1;
+  let xmlid_pos_start = fst $loc($1) in
+  let xmlid_pos_end = snd $loc($1) in
+  Printf.printf "[VALUE] value start pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" xmlid_pos_start.pos_lnum (xmlid_pos_start.pos_cnum) xmlid_pos_start.pos_bol;
+  Printf.printf "[VALUE] value end pos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" xmlid_pos_end.pos_lnum (xmlid_pos_end.pos_cnum) xmlid_pos_end.pos_bol;
+
+  let loc_start = $startpos in
+  let loc_end = $endpos in
+  Printf.printf "[LOOK HERE] value loc startpos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" loc_start.pos_lnum (loc_start.pos_cnum-loc_start.pos_bol) loc_start.pos_bol;
+  Printf.printf "[LOOK HERE] value loc endpos, lnum:\"%d\", cnum: \"%d\", bol: \"%d\" \n" loc_end.pos_lnum (loc_end.pos_cnum-loc_end.pos_bol) loc_end.pos_bol;
+
+  constant_str ~ppos:$loc $1 
+  }
 
 xml:
 | LXML attr_list block? SLASHRXML                              { xml ~ppos:$loc $1 $2 $3 []                }
@@ -854,7 +877,6 @@ xml:
 
    xml ~ppos:$loc $1 $2 $3 $5 ~tags:($1, $6) 
    }
-
 xml_contents:
 | block                                                        { $1 }
 | formlet_binding | formlet_placement | page_placement
@@ -1079,7 +1101,12 @@ moduleblock:
 | LBRACE declarations RBRACE                                   { $2 }
 
 block:
-| LBRACE block_contents RBRACE                                 { block ~ppos:$loc $2 }
+| LBRACE block_contents RBRACE                                 { 
+
+
+
+  block ~ppos:$loc $2 
+  }
 
 case_contents:
 | bindings exp                                                 { ($1, $2) }

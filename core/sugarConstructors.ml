@@ -91,7 +91,9 @@ module SugarConstructors (Position : Pos)
   (** Constants **)
 
   let constant      ?(ppos=dp) c = with_pos ppos (Constant c)
-  let constant_str  ?(ppos=dp) s = with_pos ppos (Constant (Constant.String s))
+  let constant_str  ?(ppos=dp) s = 
+  Printf.printf "[sugarConstructors.ml] constant_str: %s\n" s;
+  with_pos ppos (Constant (Constant.String s))
   let constant_char ?(ppos=dp) c = with_pos ppos (Constant (Constant.Char   c))
 
 

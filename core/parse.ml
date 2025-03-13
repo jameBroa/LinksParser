@@ -138,13 +138,18 @@ let parse_channel ?interactive ?in_context:context grammar (channel, name) =
   Printf.printf("[parse.parse_channel] called\n");
   flush stdout;
   Printf.printf "[parse.parse_channel] file dir: %s\n" name;
-  let context = LinksParser.normalize_context context in
-  let result = LinksParser.read ?nlhook:interactive ~parse:grammar
-      ~infun:(reader_of_channel channel) ~name:name ~context () in
-  Printf.printf "[parse.parse_channel] Closing channel\n";
-  flush stdout;
-  close_in channel;
-  result
+  try
+    let context = LinksParser.normalize_context context in
+    let result = LinksParser.read ?nlhook:interactive ~parse:grammar
+        ~infun:(reader_of_channel channel) ~name:name ~context () in
+    Printf.printf "[parse.parse_channel] Closing channel\n";
+    flush stdout;
+    close_in channel;
+    result
+  with e ->
+    Printf.printf "[parse.parse_channel] Error: %s\n" (Printexc.to_string e);
+    close_in channel;
+    raise e
   
 
 

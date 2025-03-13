@@ -35,7 +35,7 @@ type ast =
 
 
     
-let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
+let rec convert_phrase_to_ast ?(offset=0) (phrase : Sugartypes.phrase) : ast =
     let open Links_core.Sugartypes in
     let open Links_core.SourceCode in
     let open Links_core.Operators in
@@ -45,20 +45,26 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
     (* Printf.printf "pos_start.pos_bol: %d\n" pos_start.pos_bol; *)
     let pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
     pos_start.pos_lnum
-    (pos_start.pos_cnum - pos_start.pos_bol+2)
+    (offset + pos_start.pos_cnum - pos_start.pos_bol+2)
     pos_end.pos_lnum  
     (pos_end.pos_cnum - pos_end.pos_bol+2) 
     in
         
     
     match WithPos.node phrase with
-        | Constant c -> Leaf ("Constant: " ^ Constant.show c, pos_str)
+        | Constant c -> 
+            Leaf ("Constant: " ^ Constant.show c, pos_str)
         | Var v -> Leaf ("Variable: " ^ v, pos_str)
         | FreezeVar v -> Leaf ("FreezeVar: " ^ v, pos_str)
         | QualifiedVar vs -> Node ("QualifiedVar", pos_str, List.map (fun v -> Leaf (v, pos_str)) vs)
         | FunLit (_, _, fnlit, _) -> Node ("FunLit", pos_str, [convert_funlit_to_ast fnlit pos_str])
         | Spawn (_, _, p, _) -> Node ("Spawn", pos_str, [convert_phrase_to_ast p])
-        | Query (_, _, p, _) -> Node ("Query", pos_str, [convert_phrase_to_ast p])
+        | Query (p_opt, _, p3, _) -> 
+            Node ("Query", pos_str, 
+            match p_opt with
+            | Some (p1, p2) -> 
+                [convert_phrase_to_ast p1; convert_phrase_to_ast p2] @ [convert_phrase_to_ast p3]
+            | None ->  [convert_phrase_to_ast p3])
         | RangeLit (p1, p2) -> Node ("RangeLit", pos_str, [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
         | ListLit (ps, _) -> Node ("ListLit", pos_str, List.map convert_phrase_to_ast ps)
         | Iteration (generators, p, where, orderby) ->
@@ -66,8 +72,9 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
                 match gen with
                 | List (pat, source) ->
                     Node ("List", pos_str, [convert_pattern_to_ast pat; convert_phrase_to_ast source])
-                | Table (temp, pat, source) ->
-                    Node ("Table", pos_str, [convert_temporality_to_ast temp pos_str; convert_pattern_to_ast pat; convert_phrase_to_ast source])
+                | Table (_, pat, source) ->
+                    (* Node ("Table", pos_str, [convert_temporality_to_ast temp pos_str; convert_pattern_to_ast pat; convert_phrase_to_ast source]) *)
+                    Node ("Table", pos_str, [convert_pattern_to_ast pat; convert_phrase_to_ast source])
             ) generators in
             let where_node = match where with
                 | Some w -> [Node ("Where", pos_str, [convert_phrase_to_ast w])]
@@ -80,7 +87,44 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
         | Section s -> Leaf ("Section: " ^ Section.show s, pos_str)
         | FreezeSection s -> Leaf ("FreezeSection: " ^ Section.show s, pos_str)
         | Conditional (p1, p2, p3) -> Node ("Conditional", pos_str, [convert_phrase_to_ast p1; convert_phrase_to_ast p2; convert_phrase_to_ast p3])
-        | Block (bindings, expr) -> Node ("Block", pos_str, List.map convert_binding_to_ast bindings @ [convert_phrase_to_ast expr])
+        | Block (bindings, expr) -> 
+            let child_positions = 
+                (List.map (fun b -> WithPos.pos b) bindings) @
+                [WithPos.pos expr] 
+            in
+            
+            (* Find min start position and max end position using accessors *)
+            let min_start = List.fold_left (fun acc pos -> 
+                let start = Position.start pos in
+                let start_line = start.Lexing.pos_lnum in
+                let start_col = start.Lexing.pos_cnum - start.Lexing.pos_bol in
+                let acc_line = (Position.start acc).Lexing.pos_lnum in
+                let acc_col = (Position.start acc).Lexing.pos_cnum - (Position.start acc).Lexing.pos_bol in
+                
+                if start_line < acc_line || (start_line = acc_line && start_col < acc_col)
+                then pos else acc
+            ) (List.hd child_positions) (List.tl child_positions) in
+            
+            (* Similar changes for max_end calculation *)
+            let max_end = List.fold_left (fun acc pos ->
+                let end_pos = Position.finish pos in
+                let end_line = end_pos.Lexing.pos_lnum in
+                let end_col = end_pos.Lexing.pos_cnum - end_pos.Lexing.pos_bol in
+                let acc_line = (Position.finish acc).Lexing.pos_lnum in
+                let acc_col = (Position.finish acc).Lexing.pos_cnum - (Position.finish acc).Lexing.pos_bol in
+                
+                if end_line > acc_line || (end_line = acc_line && end_col > acc_col)
+                then pos else acc
+            ) (List.hd child_positions) (List.tl child_positions) in
+            
+            (* Now generate position string using proper field references *)
+            let start = Position.start min_start in
+            let finish = Position.finish max_end in
+            let block_pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
+              start.Lexing.pos_lnum (start.Lexing.pos_cnum - start.Lexing.pos_bol + 2)
+              finish.Lexing.pos_lnum (finish.Lexing.pos_cnum - finish.Lexing.pos_bol + 2)
+            in
+            Node ("Block", block_pos_str, List.map convert_binding_to_ast bindings @ [convert_phrase_to_ast expr])
         | InfixAppl ((_, op), lhs, rhs) -> Node ("InfixAppl", pos_str, [Leaf (BinaryOp.to_string op, pos_str); convert_phrase_to_ast lhs; convert_phrase_to_ast rhs])
         | Regex r -> Node("Regex", pos_str, [convert_regex_to_ast r])
         | UnaryAppl (_, p) -> Node ("UnaryAppl", pos_str, [convert_phrase_to_ast p])
@@ -95,7 +139,15 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
         | Upcast (p, _, _) -> Node ("Upcast", pos_str, [convert_phrase_to_ast p])
         | Instantiate p -> Node ("Instantiate", pos_str, [convert_phrase_to_ast p])
         | Generalise p -> Node ("Generalise", pos_str, [convert_phrase_to_ast p])
-        | ConstructorLit (name, expr_opt, _) -> Node ("ConstructorLit", pos_str, Leaf (name, pos_str) :: (match expr_opt with Some expr -> [convert_phrase_to_ast expr] | None -> []))
+        | ConstructorLit (name, expr_opt, _) 
+        -> 
+        Node ("ConstructorLit", pos_str, 
+            Leaf (name, pos_str) :: (
+                match expr_opt with 
+                    | Some expr -> [convert_phrase_to_ast expr] 
+                    | None -> []
+            )
+        )
         | DoOperation (p, ps, _, _) -> Node ("DoOperation", pos_str, convert_phrase_to_ast p :: List.map convert_phrase_to_ast ps)
         | Operation name -> Leaf ("Operation: " ^ name, pos_str)
         | Handle h -> Node ("Handle", pos_str, [convert_handler_to_ast h])
@@ -158,25 +210,196 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
         | LensGetLit (p, _) -> Node ("LensGetLit", pos_str,[convert_phrase_to_ast p])
         | LensCheckLit (p, _) -> Node ("LensCheckLit", pos_str, [convert_phrase_to_ast p])
         | LensPutLit (p1, p2, _) -> Node ("LensPutLit", pos_str,  [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
+        (* | Xml (name, attrs, expr_opt, children) ->
+            Node ("Xml", pos_str, Leaf (name, pos_str) ::
+            List.map (fun (attr_name, exprs) ->
+                (* Get overall attribute range *)
+                let attr_pos_start = Position.start (WithPos.pos (List.hd exprs)) in
+                let attr_pos_end = Position.finish (WithPos.pos (List.hd (List.rev exprs))) in
+                let attr_pos_str = Printf.sprintf 
+                    "{\"start\": {\"line\": %d, \"character\": %d}, \"end\": {\"line\": %d, \"character\": %d}}"
+                    attr_pos_start.pos_lnum
+                    (attr_pos_start.pos_cnum - attr_pos_start.pos_bol)
+                    attr_pos_end.pos_lnum
+                    (attr_pos_end.pos_cnum - attr_pos_end.pos_bol) in
+                
+                (* Process expressions with running position tracking *)
+                let rec process_exprs remaining_exprs acc (current_pos : Lexing.position) =
+                    match remaining_exprs with
+                    | [] -> List.rev acc
+                    | expr :: rest ->
+                        (* Calculate expression position based on current running position *)
+                        let f = Position.finish (WithPos.pos expr) in
+                        let s = Position.start (WithPos.pos expr) in
+
+                        let expr_len = f.pos_cnum - s.pos_cnum in
+                        
+                        let expr_pos_start = current_pos in
+                        let expr_pos_end = { 
+                            current_pos with 
+                            pos_cnum = current_pos.pos_cnum + expr_len 
+                        } in
+                        
+                        let expr_pos_str = Printf.sprintf 
+                            "{\"start\": {\"line\": %d, \"character\": %d}, \"end\": {\"line\": %d, \"character\": %d}}"
+                            expr_pos_start.pos_lnum
+                            (expr_pos_start.pos_cnum - expr_pos_start.pos_bol)
+                            expr_pos_end.pos_lnum
+                            (expr_pos_end.pos_cnum - expr_pos_end.pos_bol) in
+                        
+                        (* Create node based on expression type *)
+                        let node = match expr.node with
+                        | Block (bindings, expr) when List.length bindings > 0 ->
+                            (* Special handling for blocks to ensure correct positions for block contents *)
+                            let block_pos_str = Printf.sprintf 
+                                "{\"start\": {\"line\": %d, \"character\": %d}, \"end\": {\"line\": %d, \"character\": %d}}"
+                                expr_pos_start.pos_lnum
+                                (expr_pos_start.pos_cnum - expr_pos_start.pos_bol+2)
+                                expr_pos_end.pos_lnum
+                                (expr_pos_end.pos_cnum - expr_pos_end.pos_bol+2) in
+                            
+                            Node ("Expr", expr_pos_str, [
+                                Node ("Block", block_pos_str, 
+                                    List.map (fun binding -> convert_binding_to_ast binding) bindings @ [convert_phrase_to_ast expr])
+                            ])
+                        | _ ->
+                            Node ("Expr", expr_pos_str, [convert_phrase_to_ast expr])
+                        in
+                        
+                        (* Update the running position for the next expression *)
+                        let next_pos = expr_pos_end in
+                        process_exprs rest (node :: acc) next_pos
+                in
+                
+                let expr_nodes = process_exprs exprs [] attr_pos_start in
+                
+                Node (("Attribute: " ^ attr_name), attr_pos_str, expr_nodes)
+            ) attrs @
+            (match expr_opt with
+            | Some expr -> [convert_phrase_to_ast expr]
+            | None -> []
+            ) @
+            List.map convert_phrase_to_ast children) *)
+        (* | Xml (name, attrs, expr_opt, children) ->
+            Node ("Xml", pos_str, Leaf (name, pos_str) ::
+            List.map (fun (attr_name, exprs) ->
+                (* Get overall attribute position from first and last expressions *)
+                let attr_pos_start = Position.start (WithPos.pos (List.hd exprs)) in
+                let attr_pos_end = Position.finish (WithPos.pos (List.hd (List.rev exprs))) in
+                let attr_pos_str = Printf.sprintf 
+                    "{\"start\": {\"line\": %d, \"character\": %d}, \"end\": {\"line\": %d, \"character\": %d}}"
+                    attr_pos_start.pos_lnum
+                    (attr_pos_start.pos_cnum - attr_pos_start.pos_bol+2)
+                    attr_pos_end.pos_lnum
+                    (attr_pos_end.pos_cnum - attr_pos_end.pos_bol+2) in
+                
+                (* Process each expression with its own correct position information *)
+                let expr_nodes = List.map (fun expr ->
+                    (* Get exact position for this specific expression *)
+                    let expr_pos_start = Position.start (WithPos.pos expr) in
+                    let expr_pos_end = Position.finish (WithPos.pos expr) in
+                    
+                    (* For debugging *)
+                    Printf.printf "for attribute %s\n" attr_name;
+                    Printf.printf "expr_pos_start.pos_cnum: %d\n" expr_pos_start.pos_cnum;
+                    Printf.printf "expr_pos_start.pos_bol: %d\n" expr_pos_start.pos_bol;
+                    
+                    (* Create position string with correct character offsets *)
+                    let expr_pos_str = Printf.sprintf 
+                        "{\"start\": {\"line\": %d, \"character\": %d}, \"end\": {\"line\": %d, \"character\": %d}}"
+                        expr_pos_start.pos_lnum
+                        (expr_pos_start.pos_cnum - expr_pos_start.pos_bol+2)
+                        expr_pos_end.pos_lnum
+                        (expr_pos_end.pos_cnum - expr_pos_end.pos_bol+2) in
+                    
+                    (* Create expression node with correct position and properly convert its contents *)
+                    match expr.node with
+                    | Block (bindings, expr) when List.length bindings > 0 ->
+                        (* Special handling for blocks to ensure correct positions for block contents *)
+                        let block_pos_str = Printf.sprintf 
+                            "{\"start\": {\"line\": %d, \"character\": %d}, \"end\": {\"line\": %d, \"character\": %d}}"
+                            expr_pos_start.pos_lnum
+                            (expr_pos_start.pos_cnum - expr_pos_start.pos_bol+2)
+                            expr_pos_end.pos_lnum
+                            (expr_pos_end.pos_cnum - expr_pos_end.pos_bol+2) in
+                        
+                        Node ("Expr", expr_pos_str, [
+                            Node ("Block", block_pos_str, 
+                                List.map (fun binding -> convert_binding_to_ast binding) bindings @ [convert_phrase_to_ast expr])
+                        ])
+                    | _ ->
+                        Node ("Expr", expr_pos_str, [convert_phrase_to_ast expr])
+                ) exprs in
+                
+                Node (("Attribute: " ^ attr_name), attr_pos_str, expr_nodes)
+            ) attrs @
+            (match expr_opt with
+            | Some expr -> [convert_phrase_to_ast expr]
+            | None -> []
+            ) @
+            List.map convert_phrase_to_ast children) *)
         | Xml (name, attrs, expr_opt, children) -> 
             Node ("Xml", pos_str, Leaf (name, pos_str) :: 
+            (* (name, exprs) = attr *)
             List.map (fun (name, exprs) ->
-                let head_expr = List.hd exprs in
-                let expr_pos_start = Position.start (WithPos.pos head_expr) in
-                let expr_pos_end = Position.finish (WithPos.pos head_expr) in
-                let expr_pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
-                expr_pos_end.pos_lnum  
-                (expr_pos_start.pos_cnum - expr_pos_start.pos_bol+2)
-                expr_pos_end.pos_lnum  
-                (expr_pos_start.pos_cnum - expr_pos_start.pos_bol+2+(String.length name))
+                Printf.printf "starting expr_nodes construction\n";
+                (* let expr_nodes = List.map (fun expr ->
+                    let expr_pos_start = Position.start (WithPos.pos expr) in
+                    let expr_pos_end = Position.finish (WithPos.pos expr) in
+                    Printf.printf "for attribute %s\n" name;
+                    Printf.printf "expr_pos_start.pos_cnum: %d\n" expr_pos_start.pos_cnum;
+                    Printf.printf "expr_pos_start.pos_lnum: %d\n" expr_pos_start.pos_lnum;
+                    Printf.printf "expr_pos_start.pos_bol: %d\n" expr_pos_start.pos_bol;
+                    Printf.printf "actual column start pos: %d\n" (expr_pos_start.pos_cnum - expr_pos_start.pos_bol);
+
+
+                    let expr_pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
+                    expr_pos_start.pos_lnum  
+                    (expr_pos_start.pos_cnum - expr_pos_start.pos_bol+2)
+                    expr_pos_end.pos_lnum  
+                    (expr_pos_end.pos_cnum - expr_pos_end.pos_bol+2)
+                    in
+                    Node ("Expr", expr_pos_str, [convert_phrase_to_ast expr])
+                    ) exprs in *)
+                let expr_nodes = List.map convert_phrase_to_ast exprs in
+                Printf.printf "finished expr_nodes construction\n";
+
+                let attr_pos_start = Position.start (WithPos.pos (List.hd exprs)) in
+                let attr_pos_end = Position.finish (WithPos.pos (List.hd (List.rev exprs))) in
+                let attr_pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
+                  attr_pos_start.pos_lnum
+                  (attr_pos_start.pos_cnum - attr_pos_start.pos_bol + 2)
+                  attr_pos_end.pos_lnum
+                  (attr_pos_end.pos_cnum - attr_pos_end.pos_bol + 2)
                 in
-                Node (("Attribute: " ^ name), expr_pos_str, List.map convert_phrase_to_ast (List.tl exprs))
+                Node (("Attribute: " ^ name), attr_pos_str, expr_nodes)
+
             ) attrs @ 
             (match expr_opt with 
              | Some expr -> [convert_phrase_to_ast expr] 
              | None -> []
              ) @ 
             List.map convert_phrase_to_ast children)
+            (* | Xml (name, attrs, expr_opt, children) -> 
+                Node ("Xml", pos_str, Leaf (name, pos_str) :: 
+                List.map (fun (name, exprs) ->
+                    let head_expr = List.hd exprs in
+                    let expr_pos_start = Position.start (WithPos.pos head_expr) in
+                    let expr_pos_end = Position.finish (WithPos.pos head_expr) in
+                    let expr_pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
+                    expr_pos_end.pos_lnum  
+                    (expr_pos_start.pos_cnum - expr_pos_start.pos_bol+2)
+                    expr_pos_end.pos_lnum  
+                    (expr_pos_start.pos_cnum - expr_pos_start.pos_bol+2+(String.length name))
+                    in
+                    Node (("Attribute: " ^ name), expr_pos_str, List.map convert_phrase_to_ast (List.tl exprs))
+                ) attrs @ 
+                (match expr_opt with 
+                 | Some expr -> [convert_phrase_to_ast expr] 
+                 | None -> []
+                 ) @ 
+                List.map convert_phrase_to_ast children)
+                             *)
         | TextNode text -> Leaf ("TextNode: " ^ text, pos_str)
         | Formlet (p1, p2) -> Node ("Formlet", pos_str, [convert_phrase_to_ast p1; convert_phrase_to_ast p2])
         | Page p -> Node ("Page", pos_str, [convert_phrase_to_ast p])
@@ -190,24 +413,13 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
         | Raise -> Leaf ("Raise", pos_str)
 
     
-
-    (* | Var v -> Leaf ("Var: " ^ v)
-    | FunLit (_, _, fnlit, _) -> Node ("FunLit: ", [convert_funlit_to_ast fnlit])
-    | Block (bindings, expr) -> Node ("Block: ", List.map convert_binding_to_ast bindings @ [convert_phrase_to_ast expr])
-    | InfixAppl ((_, op), lhs, rhs) -> Node ("InfixAppl: ", [Leaf (BinaryOp.to_string op); convert_phrase_to_ast lhs; convert_phrase_to_ast rhs])
-    | FnAppl (fn, args) -> Node ("FnAppl: ", convert_phrase_to_ast fn :: List.map convert_phrase_to_ast args)
-    | Constant c -> Leaf ("Constant: " ^ Constant.show c)
-    | RecordLit (fields, _) -> Node ("RecordLit", List.map (fun (name, expr) -> Node (name, [convert_phrase_to_ast expr])) fields)
-    | ConstructorLit (name, expr_opt, _) -> Node ("ConstructorLit", [Leaf name] @ (match expr_opt with Some expr -> [convert_phrase_to_ast expr] | None -> []))
-    | _ -> Leaf (show_phrase phrase) *)
-  
-  (* Helper function to convert a funlit to an AST node *)
-  and convert_temporality_to_ast (temp: CommonTypes.Temporality.t) (pos_str: string) : ast =
+  (* Commented out temporality code since wasn't useful *)
+  (* and convert_temporality_to_ast (temp: CommonTypes.Temporality.t) (pos_str: string) : ast =
     let open CommonTypes in
     match temp with
     | Temporality.Current -> Node ("Current", pos_str, [])
     | Temporality.Transaction -> Node ("Transaction", pos_str, [])
-    | Temporality.Valid -> Node ("Valid", pos_str, [])
+    | Temporality.Valid -> Node ("Valid", pos_str, []) *)
   and convert_funlit_to_ast (fnlit : Sugartypes.funlit) (pos: string) : ast =
     let open Sugartypes in
     (* let open SourceCode in *)
@@ -226,6 +438,7 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
   and convert_pattern_to_ast (pattern : Sugartypes.Pattern.with_pos) : ast =
     let open Sugartypes.Pattern in
     let open Links_core.SourceCode in
+    let open CommonTypes in
     (* let pos_str = Position.show (WithPos.pos pattern) in *)
     let pos_start = Position.start (WithPos.pos pattern) in
     let pos_end = Position.finish (WithPos.pos pattern) in
@@ -237,6 +450,10 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
     in
     Printf.printf "Variable position: %s\n" pos_str;
     match WithPos.node pattern with
+    | Any -> Leaf ("Any", pos_str)
+    | Nil -> Leaf ("Nil", pos_str)
+    | Cons (head, tail) -> Node ("Cons", pos_str, [convert_pattern_to_ast head; convert_pattern_to_ast tail])
+    | List patterns -> Node ("List", pos_str, List.map convert_pattern_to_ast patterns)
     | Variable bndr -> 
         Leaf ("Variable: " ^ (Sugartypes.Binder.to_name bndr), pos_str)
     | Record (fields, None) ->
@@ -244,7 +461,29 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
             convert_pattern_to_ast var
           ) fields in
           Node ("Record" , pos_str, children)
-    | node -> Leaf ((show node), pos_str)
+    | Variant (name, withpos_option) ->
+    let name_node = Leaf (name, pos_str) in
+    let children = match withpos_option with
+        | Some var -> [convert_pattern_to_ast var]
+        | None -> []
+    in
+    Node ("Variant", pos_str, name_node :: children)
+    | Operation (label, args, result, _) ->
+        Node ("Operation", pos_str, Leaf (label, pos_str) :: List.map convert_pattern_to_ast args @ [convert_pattern_to_ast result])
+    | Negative names -> Node ("Negative", pos_str, List.map (fun name -> Leaf (name, pos_str)) names)
+    | Record (fields, withpos_option) ->
+        let field_nodes = List.map (fun (name, var) -> Node (name, pos_str, [convert_pattern_to_ast var])) fields in
+        let withpos_nodes = match withpos_option with
+          | Some var -> [convert_pattern_to_ast var]
+          | None -> []
+        in
+        Node ("Record", pos_str, field_nodes @ withpos_nodes)
+    | Tuple patterns -> Node ("Tuple", pos_str, List.map convert_pattern_to_ast patterns)
+    | Constant c -> Leaf ("Constant: " ^ (Constant.show c), pos_str)
+    | As (bndr, var) -> Node ("As", pos_str, [Leaf ("Binder: " ^ (Sugartypes.Binder.to_name bndr), pos_str); convert_pattern_to_ast var])
+    | HasType (var, datatype) -> 
+        let (actual, _) = datatype in
+        Node ("HasType", pos_str, [convert_pattern_to_ast var; convert_datatype_to_ast actual])
   
   (* Helper function to convert a switch body to an AST node *)
   and convert_switch_body_to_ast (body : (Sugartypes.Pattern.with_pos * Sugartypes.phrase) list) : ast =
@@ -618,10 +857,11 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
     ])
     and convert_case_to_ast (case : Sugartypes.clause) : ast =
         let open SourceCode in
-        let tmp = WithPos.make case in
+        (* let tmp = WithPos.make case in *)
         (* let pos_str = Position.show (WithPos.pos tmp) in *)
-        let pos_start = Position.start (WithPos.pos tmp) in
-        let pos_end = Position.finish (WithPos.pos tmp) in
+        let (x, _) = case in
+        let pos_start = Position.start (WithPos.pos x) in
+        let pos_end = Position.finish (WithPos.pos x) in
         let pos_str = Printf.sprintf "{\"start\": {\"line\": %d, \"col\": %d}, \"finish\": {\"line\": %d, \"col\": %d}}" 
         pos_start.pos_lnum
         (pos_start.pos_cnum - pos_start.pos_bol+2)
@@ -629,7 +869,15 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
         (pos_end.pos_cnum - pos_end.pos_bol+2) 
         in
         let (pat, phr) = case in
-        Node ("Case", pos_str, [convert_pattern_to_ast pat; convert_phrase_to_ast phr])
+        Node ("Case", pos_str, convert_pattern_to_ast pat :: [convert_phrase_to_ast phr])
+
+            (* Node("Case statement", pos_str, [(convert_pattern_to_ast pat)]); 
+            Node("Case body", pos_str, [(convert_phrase_to_ast phr)]);  *)
+        (* ) *)
+
+        (* Node ("Case", pos_str, [Node("Case phrase", pos_str, [convert_pattern_to_ast pat; convert_phrase_to_ast phr])]) *)
+
+        (* Node ("Case", pos_str, [convert_pattern_to_ast pat] @ [convert_phrase_to_ast phr]) *)
     and convert_table_lit_to_ast (table_lit : Sugartypes.table_lit) : ast =
         let open Sugartypes in
         let open CommonTypes in
@@ -793,7 +1041,20 @@ let rec convert_phrase_to_ast (phrase : Sugartypes.phrase) : ast =
                 (end_pos.pos_cnum - end_pos.pos_bol+2)
                 in
       let ast = Node ("root", pos_str, List.map convert_binding_to_ast bindings) in
-      Yojson.Safe.to_string (ast_to_yojson ast)
+
+        (* let rec ast_to_msgpack input_ast = 
+            List.map(fun node ->
+                match node with
+                | Leaf (name, pos) -> Mparray[Mpstring name; Mpstring pos]
+                | Node (name, pos, children) -> Mparray[Mpstring name; Mpstring pos; Mparray (List.map ast_to_msgpack children)]
+                ) input_ast
+
+        in
+        let ast_msgpack = ast_to_msgpack ast in
+        let ast_msgpack_str = Msgpack.to_string ast_msgpack in
+        ast_msgpack_str *)
+    (* Below is what WORKS *)
+      Yojson.Safe.to_string (ast_to_yojson ast) 
 
 
 (* Return AST as ast *)

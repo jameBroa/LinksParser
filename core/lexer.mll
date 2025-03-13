@@ -86,7 +86,6 @@ let bump_lines lexbuf n =
 
 
 let count_newlines = StringUtils.count '\n'
-let count_spaces = StringUtils.count ' '
 
 
 let keywords = [
@@ -247,8 +246,10 @@ rule lex ctxt nl = parse
                                             OPERATOR "<")
                                           else (
                                             (* come back here after scanning the start tag *)
-                                            Printf.printf "[start_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n" lexbuf.lex_start_p.pos_lnum lexbuf.lex_start_p.pos_cnum lexbuf.lex_start_p.pos_bol;
-                                            Printf.printf "[curr_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n\n" lexbuf.lex_curr_p.pos_lnum lexbuf.lex_curr_p.pos_cnum lexbuf.lex_curr_p.pos_bol;
+                                            Printf.printf "[opening start_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n" lexbuf.lex_start_p.pos_lnum lexbuf.lex_start_p.pos_cnum lexbuf.lex_start_p.pos_bol;
+                                            Printf.printf "[opening curr_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n\n" lexbuf.lex_curr_p.pos_lnum lexbuf.lex_curr_p.pos_cnum lexbuf.lex_curr_p.pos_bol;
+
+
                                             flush stdout;
                                             ctxt#push_lexer (starttag ctxt nl); LXML id) }
   | "<!--"                              { xmlcomment_lex ctxt nl lexbuf }
@@ -350,6 +351,7 @@ and starttag ctxt nl = parse
   | '"'                                 { (* Come back here after scanning the attr value *)
                                           ctxt#push_lexer (attrlex ctxt nl); LQUOTE }
   | '{'                                 { (* Come back here after scanning the attribute block *)
+                                          
                                           ctxt#push_lexer (lex ctxt nl); LBRACE }
   | "/>"                                { ctxt#pop_lexer (* fall back *); SLASHRXML }
   | '\n'                                { nl () ; bump_lines lexbuf 1; starttag ctxt nl lexbuf }
@@ -369,9 +371,20 @@ and xmllex ctxt nl = parse
   | "}"                                 { raise (LexicalError (lexeme lexbuf, lexeme_end_p lexbuf)) }
   | [^ '{' '}' '<' '&' ]* as cdata      { 
     bump_lines lexbuf (count_newlines cdata); 
-    let new_bol = (lexbuf.Lexing.lex_curr_p.pos_bol - ((count_spaces cdata) - 1)) in
-    let pos = { lexbuf.Lexing.lex_curr_p with pos_bol = new_bol } in
+    let new_pos_bol =
+      match String.rindex_opt cdata '\n' with
+      | Some idx ->
+          (* The new beginning-of-line is the position after the last newline. 
+             Here, we deduct the number of characters after the newline from the current pos_cnum *)
+          lexbuf.lex_curr_p.pos_cnum - (String.length cdata - idx - 1)
+      | None ->
+          (* If no newline was found, keep the current beginning-of-line *)
+          lexbuf.lex_curr_p.pos_bol
+    in
+    let pos = { lexbuf.Lexing.lex_curr_p with pos_bol = (new_pos_bol) } in
     lexbuf.Lexing.lex_curr_p <- pos;
+    Printf.printf "CDATA: \"%s\"\n" cdata;
+    Printf.printf "Length of CDATA: %d\n" (String.length cdata);
     CDATA cdata
   }
   | "&amp;"                             { CDATA "&" }
@@ -380,6 +393,7 @@ and xmllex ctxt nl = parse
   | "{|"                                { (* scan the expression, then back here *)
                                           ctxt#push_lexer (lex ctxt nl); LBRACEBAR }
   | '{'                                 { (* scan the expression, then back here *)
+   
                                           ctxt#push_lexer (lex ctxt nl); LBRACE }
   | "</" (def_tagname as var) '>'       { (* fall back *)
                                           ctxt#pop_lexer; ENDTAG var }
@@ -391,13 +405,40 @@ and xmllex ctxt nl = parse
 and attrlex ctxt nl = parse
   | eof                                 { EOF }
   | '"'                                 { (* fall back *)
+  
   Printf.printf "[start_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n" lexbuf.lex_start_p.pos_lnum lexbuf.lex_start_p.pos_cnum lexbuf.lex_start_p.pos_bol;
                                           Printf.printf "[curr_p] pos_lnum: %d, pos_cnum: %d, pos_bol: %d\n\n" lexbuf.lex_curr_p.pos_lnum lexbuf.lex_curr_p.pos_cnum lexbuf.lex_curr_p.pos_bol;
                                           ctxt#pop_lexer; RQUOTE }
   | '{'                                 { (* scan the expression, then back here *)
+                                          
                                           ctxt#push_lexer (lex ctxt nl); LBRACE }
   | '\n'                                { nl (); bump_lines lexbuf 1; attrlex ctxt nl lexbuf }
-  | [^ '{' '"']* as string              { bump_lines lexbuf (count_newlines string);  STRING string }
+  | [ '\t']+  { 
+    lexbuf.lex_start_p <- lexbuf.lex_curr_p; 
+    attrlex ctxt nl lexbuf 
+}
+  | [^ '{' '"']* as string              {   
+                                            Printf.printf "ATTR BLOCK \"%s\"\n" string;
+                                            Printf.printf "(line: %d, cnum %d, bool: %d)\n" lexbuf.lex_start_p.pos_lnum lexbuf.lex_start_p.pos_cnum lexbuf.lex_start_p.pos_bol;
+                                            Printf.printf "(line: %d, cnum %d, bool: %d)\n" lexbuf.lex_curr_p.pos_lnum lexbuf.lex_curr_p.pos_cnum lexbuf.lex_curr_p.pos_bol;
+                                            flush stdout;bump_lines lexbuf (count_newlines string);  
+                                            let new_pos_bol =
+                                              match String.rindex_opt string '\n' with
+                                              | Some idx ->
+                                                  (* The new beginning-of-line is the position after the last newline. 
+                                                    Here, we deduct the number of characters after the newline from the current pos_cnum *)
+                                                    Printf.printf "THERE ARE newlines HERE\n";
+                                                  lexbuf.lex_curr_p.pos_cnum - (String.length string - idx - 1)
+                                              | None ->
+                                                  (* If no newline was found, keep the current beginning-of-line *)
+                                                  lexbuf.lex_curr_p.pos_bol
+                                            in
+                                            let pos = { lexbuf.Lexing.lex_curr_p with pos_bol = (new_pos_bol) } in
+                                            lexbuf.Lexing.lex_curr_p <- pos;
+                                            
+                                            
+                                            STRING string }
+                  
   | _                                   { raise (LexicalError (lexeme lexbuf, lexeme_end_p lexbuf)) }
 and regex' ctxt nl = parse
   | eof                                 { EOF }
